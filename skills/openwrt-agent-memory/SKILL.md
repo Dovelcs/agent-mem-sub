@@ -1,6 +1,6 @@
 ---
 name: openwrt-agent-memory
-description: Use when working with the user's OpenWrt soft-router agent-memory system, including recalling or writing durable memories, checking /opt/agent-memory, Qdrant, embedding, Codex Hook behavior, MCP coverage, SSD-backed storage, startup settings, or performance. Trigger for Chinese or English requests mentioning soft router, OpenWrt memory, agent-memory, Qdrant, embedding, recall, /opt/agent-memory, /mnt/agent-memory-store, or persistent project/device facts.
+description: Use when working with the user's OpenWrt soft-router agent-memory system or the unified local workflow entrypoint. Covers recalling or writing durable memories, checking /opt/agent-memory, Qdrant, embedding, Codex Hook behavior, MCP coverage, SSD-backed storage, startup settings, performance, conversation trunk, workflow planning, spec-lite plans, subagent dispatch, spec/code review checkpoints, and archived docs-first/codex-orchestrator/subagent-driven-development rules. Trigger for Chinese or English requests mentioning soft router, OpenWrt memory, agent-memory, Qdrant, embedding, recall, /opt/agent-memory, /mnt/agent-memory-store, persistent project/device facts, 写计划, 主干, trunk, workflow, plan, 子代理, subagent, review, code review, spec review, docs-first, codex-orchestrator, or subagent-driven-development.
 metadata:
   short-description: Operate the OpenWrt agent-memory service
 ---
