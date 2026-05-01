@@ -1,0 +1,21 @@
+# Runtime state
+agent-memory/agent.db
+agent-memory/docs/
+agent-memory/data/
+agent-memory/qdrant_storage/
+agent-memory/wheels/
+
+# Python/build cache
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Local/editor files
+.env
+.env.*
+!.env.example
+.DS_Store
+.vscode/
+.idea/

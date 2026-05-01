@@ -1,0 +1,27 @@
+services:
+  qdrant:
+    image: docker.m.daocloud.io/qdrant/qdrant:v1.12.6
+    container_name: agent-memory-qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+  embedding:
+    build:
+      context: ./embedding-worker
+    image: agent-memory-embedder:local
+    container_name: agent-memory-embedding
+    restart: unless-stopped
+    entrypoint: ["python", "/work/server.py"]
+    environment:
+      EMBED_MODEL: intfloat/multilingual-e5-small
+      EMBED_QUERY_PREFIX: "query: "
+      HF_HOME: /models/huggingface
+      TRANSFORMERS_CACHE: /models/huggingface
+      SENTENCE_TRANSFORMERS_HOME: /models/sentence-transformers
+      PORT: "18089"
+    ports:
+      - "127.0.0.1:18089:18089"
+    volumes:
+      - ./data/model-cache:/models

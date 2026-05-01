@@ -1,0 +1,43 @@
+database:
+  path: /opt/agent-memory/agent.db
+
+server:
+  host: 127.0.0.1
+  port: 18088
+  recall_timeout_seconds: 1.8
+
+qdrant:
+  enabled: true
+  url: http://127.0.0.1:6333
+  collection: agent_chunks
+  timeout_seconds: 0.5
+  vector_size: 384
+
+embedding:
+  provider: http
+  local_model: intfloat/multilingual-e5-small
+  http_url: http://127.0.0.1:18089
+  query_prefix: "query: "
+  openai_model: text-embedding-3-small
+  openai_api_key_env: OPENAI_API_KEY
+  allow_during_recall: true
+  timeout_seconds: 0.8
+
+ingest:
+  docs_path: /opt/agent-memory/docs
+  chunk_chars: 1200
+  chunk_overlap: 160
+  supported_extensions:
+    - .md
+    - .txt
+    - .log
+    - .json
+    - .yaml
+    - .yml
+    - .csv
+
+recall:
+  fts_limit: 20
+  vector_limit: 20
+  default_limit_memories: 5
+  default_limit_docs: 3

@@ -1,0 +1,7 @@
+interface:
+  display_name: "OpenWrt Agent Memory"
+  short_description: "Operate soft-router memory recall"
+  default_prompt: "Use $openwrt-agent-memory to check the soft-router memory system and write any durable operational facts."
+
+policy:
+  allow_implicit_invocation: true
