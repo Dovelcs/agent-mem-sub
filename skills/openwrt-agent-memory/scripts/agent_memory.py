@@ -160,10 +160,12 @@ def dedupe(values: list[str]) -> list[str]:
     return result
 
 
-def default_found_title(kind: str, fact: str, paths: list[str]) -> str:
+def default_found_title(kind: str, fact: str, paths: list[str], goal: str = "") -> str:
+    if goal:
+        return compact(goal, 120)
     if paths:
-        return f"{kind} result: {Path(paths[0]).name}"
-    return f"{kind} result: {compact(fact, 96)}"
+        return f"Lookup result: {Path(paths[0]).name}"
+    return f"Lookup result: {compact(fact, 96)}"
 
 
 def build_found_payload(args: argparse.Namespace, record: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -182,7 +184,8 @@ def build_found_payload(args: argparse.Namespace, record: dict[str, Any] | None 
     device = str(record.get("device") or args.device)
     scope = str(record.get("scope") or args.scope or repo or platform or Path(cwd).resolve().name)
     source = str(record.get("source") or args.source or f"codex/{kind}-result")
-    title = str(record.get("title") or args.title or default_found_title(kind, fact, paths))
+    goal = str(record.get("goal") or record.get("purpose") or args.goal)
+    title = str(record.get("title") or args.title or default_found_title(kind, fact, paths, goal))
     tags = dedupe(
         as_list(getattr(args, "tag", []))
         + as_list(record.get("tags") or record.get("tag"))
@@ -194,6 +197,8 @@ def build_found_payload(args: argparse.Namespace, record: dict[str, Any] | None 
     if len(paths) > 1:
         joined = ",".join(paths[:8])
         environment = "; ".join(part for part in (environment, f"paths={joined}") if part)
+    symbol = str(record.get("symbol") or record.get("function") or record.get("entry") or args.symbol)
+    line = str(record.get("line") or record.get("line_number") or args.line)
 
     return {
         "fact": fact,
@@ -202,7 +207,7 @@ def build_found_payload(args: argparse.Namespace, record: dict[str, Any] | None 
         "title": title,
         "tags": tags,
         "source": source,
-        "goal": str(record.get("goal") or args.goal),
+        "goal": goal,
         "cwd": cwd,
         "repo": repo,
         "branch": branch,
@@ -210,6 +215,8 @@ def build_found_payload(args: argparse.Namespace, record: dict[str, Any] | None 
         "device": device,
         "document_path": paths[0] if paths else "",
         "environment": environment,
+        "symbol": symbol,
+        "line": line,
         "confidence": float(record.get("confidence") or args.confidence),
         "importance": float(record.get("importance") or args.importance),
         "status": str(record.get("status") or args.status),
@@ -417,6 +424,8 @@ def main() -> int:
         found_parser.add_argument("--platform", default="")
         found_parser.add_argument("--device", default="")
         found_parser.add_argument("--environment", default="")
+        found_parser.add_argument("--symbol", default="", help="Function, symbol, entrypoint, service, or route name found by the lookup.")
+        found_parser.add_argument("--line", default="", help="Line number when the lookup result has a stable line.")
         found_parser.add_argument("--confidence", type=float, default=0.85)
         found_parser.add_argument("--importance", type=float, default=0.65)
         found_parser.add_argument("--status", default="active")

@@ -67,6 +67,11 @@ workflow rules only; retrieve facts through recall or `/memory/search`.
    Do not re-run broad `rg`, `find`, or `git log` just to rediscover the same
    fact. Re-scan only when the remembered context is incomplete, stale,
    contradicted by targeted verification, or insufficient to continue.
+14. For function, service-entry, build-entry, hook, route, or implementation
+   location lookups, the reusable result must include the symbol/entry name and
+   file path. Include the line number when the lookup output provides a stable
+   line. A memory such as "found in foo.c" is too weak; write "entry
+   `foo_start()` is at `path/foo.c:123` and is reached from ...".
 
 ## Unified Workflow Entry
 
@@ -338,12 +343,20 @@ If vector recall is active, doc items should have nonzero `vector_score`.
 ## Writing Durable Memories
 
 For facts discovered by `find`, `rg`, `git log`, or a focused inspection, send
-only the verified conclusion to the server-side smart writer. Do not paste raw
-search output into memory. Bind the conclusion to the actual cwd/repo/branch,
-path, platform, device, or environment so future recall can prefer the known
-answer over another SDK scan. The client should not spend extra round trips
-deciding create vs update; OpenWrt performs the same-topic check and returns
-`created`, `updated`, or `skipped`.
+the tool purpose plus the verified conclusion to the server-side smart writer.
+Do not paste raw search output into memory, and do not make the memory about
+which tool was used. The reusable fact is the human task shape: what question
+the tool was answering, what entry/path/route was found, and when that result
+can be reused. Bind the conclusion to the actual cwd/repo/branch, path,
+platform, device, or environment so future recall can prefer the known answer
+over another SDK scan. The client should not spend extra round trips deciding
+create vs update; OpenWrt performs the same-topic check and returns `created`,
+`updated`, or `skipped`.
+
+For function, service-entry, build-entry, hook, route, or implementation
+location lookups, make the `Result` carry the concrete symbol/entry plus path.
+If a stable line number is available, include it in the result and pass
+`--symbol` and `--line` to `write-found`.
 
 When memory already returns an exact conclusion for a lookup, use it as the
 starting point. A targeted read of the remembered file or command is acceptable
@@ -354,6 +367,9 @@ the remembered route fails or lacks enough detail to proceed.
 python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py write-found \
   "verified conclusion with the actual path and reuse condition" \
   --kind rg \
+  --goal "what this lookup was trying to find" \
+  --symbol "entry_or_function_name" \
+  --line 123 \
   --path path/that/was/verified \
   --scope repo-or-platform \
   --tag build-entry

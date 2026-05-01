@@ -76,11 +76,33 @@ def context_parts(payload: dict[str, Any]) -> list[str]:
     return parts
 
 
+def symbol_location_parts(payload: dict[str, Any]) -> list[str]:
+    parts = []
+    for key, label in (("symbol", "symbol"), ("function", "function"), ("entry", "entry")):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            parts.append(f"{label}={value}")
+            break
+    line = str(payload.get("line") or payload.get("line_number") or "").strip()
+    if line:
+        parts.append(f"line={line}")
+    return parts
+
+
 def scoped_content(fact: str, payload: dict[str, Any]) -> str:
+    goal = str(payload.get("goal") or payload.get("purpose") or "").strip()
+    extra = symbol_location_parts(payload)
+    result = compact(fact, 560)
+    if extra:
+        result = compact(f"{result} Location: {'; '.join(extra)}.", 620)
+    if goal:
+        body = f"Purpose: {compact(goal, 220)}. Result: {result}"
+    else:
+        body = f"Result: {result}"
     parts = context_parts(payload)
     if not parts:
-        return compact(fact, 640)
-    return compact(f"{fact} Context: {'; '.join(parts)}.", 760)
+        return compact(body, 760)
+    return compact(f"{body} Context: {'; '.join(parts)}.", 900)
 
 
 def scoped_tags(memory_type: str, payload: dict[str, Any]) -> list[str]:

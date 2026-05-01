@@ -10,6 +10,9 @@ merged workflow skill set.
   and operation scripts.
 - `skills/openwrt-agent-memory/` - active Codex skill for operating the memory
   service and the unified workflow/trunk/subagent/review route.
+- `codex-global/` - versioned global Codex prompt override and lightweight
+  memory-gate hooks that make reusable lookup results become memory-write
+  candidates before final handoff.
 - `skills.disabled/openwrt-agent-memory-absorbed-20260501/` - archived
   third-party workflow skills absorbed into `openwrt-agent-memory`, kept for
   rollback and reference.

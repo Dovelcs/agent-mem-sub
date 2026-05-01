@@ -107,6 +107,8 @@ class MemoryWriteFactRequest(BaseModel):
     device: str = ""
     document_path: str = ""
     environment: str = ""
+    symbol: str = ""
+    line: str = ""
     confidence: float = 0.85
     importance: float = 0.65
     status: str = "active"
