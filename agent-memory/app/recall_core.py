@@ -21,6 +21,7 @@ from rerank import rerank
 GENERIC_DOC_TOKENS = {
     "server",
     "service",
+    "codex",
     "guide",
     "developer",
     "development",
@@ -79,6 +80,62 @@ HOST_INDEX_TOKENS = {
     "本机路径",
     "检出",
 }
+WORKFLOW_PROMPT_TOKENS = {
+    "memory",
+    "agent-memory",
+    "workflow",
+    "plan",
+    "trunk",
+    "subagent",
+    "review",
+    "commit",
+    "jira",
+    "git",
+    "docs-first",
+    "codex-orchestrator",
+    "记忆",
+    "召回",
+    "计划",
+    "主干",
+    "子代理",
+    "评审",
+    "提交",
+}
+ROUTE_MEMORY_TYPES = {"decision_policy", "route_guard", "verified_route", "agent_route", "route", "pitfall"}
+GENERIC_ROUTE_TOKENS = GENERIC_DOC_TOKENS | {
+    "debug",
+    "route",
+    "routes",
+    "route_guard",
+    "verified_route",
+    "decision_policy",
+    "project_fact",
+    "hardware_debug",
+    "dts",
+    "dtsi",
+    "driver",
+    "kernel",
+    "runtime",
+    "probe",
+    "reference",
+    "code",
+    "path",
+    "final",
+    "progress",
+    "status",
+    "task",
+    "completion",
+    "watch",
+    "repo",
+    "branch",
+    "main",
+    "调试",
+    "定位",
+    "外设",
+    "路线",
+    "路径",
+    "项目",
+}
 
 
 def tokens(value: str) -> set[str]:
@@ -123,6 +180,18 @@ def repo_aliases(request: dict[str, Any]) -> set[str]:
     return aliases
 
 
+def contains_path_alias(blob: str, alias: str) -> bool:
+    start = 0
+    while True:
+        idx = blob.find(alias, start)
+        if idx < 0:
+            return False
+        next_char = blob[idx + len(alias) : idx + len(alias) + 1]
+        if not next_char or next_char in {"/", "\\", " ", "\t", "\n", "\r", ";", ":", ",", ")", "]", "}"}:
+            return True
+        start = idx + 1
+
+
 def has_repo_context(item: dict[str, Any], request: dict[str, Any]) -> bool:
     blob = item_blob(item).lower()
     path = str(item.get("path") or "").lower()
@@ -131,7 +200,7 @@ def has_repo_context(item: dict[str, Any], request: dict[str, Any]) -> bool:
     for alias in repo_aliases(request):
         if not alias:
             continue
-        if "/" in alias and alias in blob:
+        if "/" in alias and contains_path_alias(blob, alias):
             return True
         if alias and alias in {scope}:
             return True
@@ -152,6 +221,21 @@ def strong_prompt_overlap(item: dict[str, Any], request: dict[str, Any]) -> set[
     return useful_prompt_tokens & tokens(item_blob(item))
 
 
+def topic_prompt_tokens(request: dict[str, Any]) -> set[str]:
+    useful: set[str] = set()
+    for token in prompt_tokens(request):
+        if token in GENERIC_ROUTE_TOKENS or len(token) < 2:
+            continue
+        if re.fullmatch(r"(rk\d{4}[a-z]?|rv\d{4}[a-z]?|qsm\d+|qsc\d+|sg\d+|sh\d+)", token):
+            continue
+        useful.add(token)
+    return useful
+
+
+def strong_topic_overlap(item: dict[str, Any], request: dict[str, Any]) -> set[str]:
+    return topic_prompt_tokens(request) & tokens(item_blob(item))
+
+
 def has_platform_context(item: dict[str, Any], request: dict[str, Any]) -> bool:
     scope = str(item.get("reuse_scope") or "")
     if scope in {"same_platform", "same_family"}:
@@ -165,8 +249,25 @@ def memory_applicable(item: dict[str, Any], request: dict[str, Any]) -> bool:
     scope = str(item.get("scope") or "").lower()
     if scope in HOST_INDEX_SCOPES:
         return bool(prompt_tokens(request) & HOST_INDEX_TOKENS)
+    if memory_type == "workflow_policy" and scope == "global":
+        prompt = prompt_tokens(request)
+        return bool(prompt & WORKFLOW_PROMPT_TOKENS) or bool(strong_topic_overlap(item, request))
     if memory_type in {"project_fact", "hardware_debug", "project"}:
-        return has_repo_context(item, request) or has_platform_context(item, request)
+        if has_repo_context(item, request):
+            return True
+        if has_platform_context(item, request):
+            topics = topic_prompt_tokens(request)
+            return not topics or bool(strong_topic_overlap(item, request))
+        return False
+    if memory_type in ROUTE_MEMORY_TYPES:
+        if has_repo_context(item, request):
+            return True
+        if has_platform_context(item, request):
+            topics = topic_prompt_tokens(request)
+            return not topics or bool(strong_topic_overlap(item, request))
+        if scope == "global":
+            return bool(strong_topic_overlap(item, request))
+        return bool(strong_topic_overlap(item, request))
     return True
 
 
