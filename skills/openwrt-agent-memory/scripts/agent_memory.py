@@ -252,7 +252,9 @@ BASELINE_MEMORIES: list[dict[str, Any]] = [
             "writes, and exposes memory-backed conversation trunk API/MCP tools "
             "to preserve task direction across compaction. Use "
             "trunk_upsert/update/get for long branching tasks and trunk_cleanup "
-            "for stale inactive plans."
+            "for stale inactive plans. Default trunk cleanup deletes unactivated "
+            "draft trunks after 24 hours and inactive unfinished trunks after "
+            "168 hours; done and archived trunks are retained."
         ),
         "tags": [
             "openwrt",
@@ -265,8 +267,14 @@ BASELINE_MEMORIES: list[dict[str, Any]] = [
             "conversation_trunk",
             "mcp",
             "trunk_cleanup",
+            "draft_ttl_hours",
+            "inactive_ttl_hours",
+            "done",
+            "archived",
             "上下文压缩",
             "主干",
+            "删除",
+            "清理",
             "召回",
         ],
         "importance": 0.9,

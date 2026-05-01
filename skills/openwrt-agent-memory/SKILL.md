@@ -292,9 +292,10 @@ not in local plan text.
   progress before continuing.
 - Pass `trunk_id` into `/recall` when available; recall will inject only a
   compact "Current trunk" section.
-- Run `trunk_cleanup` periodically. Draft trunks that were never activated and
-  inactive trunks are deleted after their TTLs, so stale plans do not pollute
-  future sessions.
+- Run `trunk_cleanup` periodically. By default, draft trunks that were never
+  activated are deleted after 24 hours, inactive unfinished trunks are deleted
+  after 168 hours, and `done`/`archived` trunks are retained. Adjust TTLs with
+  `workflow-cleanup --draft-ttl-hours ... --inactive-ttl-hours ...` when needed.
 
 ## SSH MCP Caveats
 
