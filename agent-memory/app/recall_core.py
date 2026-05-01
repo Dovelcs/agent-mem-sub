@@ -56,6 +56,16 @@ HARDWARE_DOC_TOKENS = {
     "uart",
     "usb",
     "adb",
+    "mipi",
+    "dsi",
+    "csi",
+    "edp",
+    "hdmi",
+    "drm",
+    "display",
+    "camera",
+    "vop",
+    "lvds",
     "fastboot",
     "upgrade_tool",
     "rkdeveloptool",
@@ -79,6 +89,19 @@ HOST_INDEX_TOKENS = {
     "检出路径",
     "本机路径",
     "检出",
+}
+DOC_INDEX_PATH_SUFFIXES = {"summary.csv", "manifest.json", "meta.yaml", "meta.json"}
+DOC_INDEX_PROMPT_TOKENS = {
+    "manifest",
+    "summary",
+    "index",
+    "source",
+    "provenance",
+    "docs",
+    "文档",
+    "索引",
+    "来源",
+    "清单",
 }
 WORKFLOW_PROMPT_TOKENS = {
     "memory",
@@ -247,6 +270,7 @@ def has_platform_context(item: dict[str, Any], request: dict[str, Any]) -> bool:
 def memory_applicable(item: dict[str, Any], request: dict[str, Any]) -> bool:
     memory_type = str(item.get("type") or "")
     scope = str(item.get("scope") or "").lower()
+    reuse_scope = str(item.get("reuse_scope") or "")
     if scope in HOST_INDEX_SCOPES:
         return bool(prompt_tokens(request) & HOST_INDEX_TOKENS)
     if memory_type == "workflow_policy" and scope == "global":
@@ -257,14 +281,20 @@ def memory_applicable(item: dict[str, Any], request: dict[str, Any]) -> bool:
             return True
         if has_platform_context(item, request):
             topics = topic_prompt_tokens(request)
-            return not topics or bool(strong_topic_overlap(item, request))
+            overlap = strong_topic_overlap(item, request)
+            if reuse_scope == "same_family":
+                return len(overlap) >= 2
+            return not topics or bool(overlap)
         return False
     if memory_type in ROUTE_MEMORY_TYPES:
         if has_repo_context(item, request):
             return True
         if has_platform_context(item, request):
             topics = topic_prompt_tokens(request)
-            return not topics or bool(strong_topic_overlap(item, request))
+            overlap = strong_topic_overlap(item, request)
+            if reuse_scope == "same_family":
+                return len(overlap) >= 2
+            return not topics or bool(overlap)
         if scope == "global":
             return bool(strong_topic_overlap(item, request))
         return bool(strong_topic_overlap(item, request))
@@ -272,6 +302,9 @@ def memory_applicable(item: dict[str, Any], request: dict[str, Any]) -> bool:
 
 
 def doc_applicable(item: dict[str, Any], request: dict[str, Any]) -> bool:
+    path_name = str(item.get("path") or "").rsplit("/", 1)[-1].lower()
+    if path_name in DOC_INDEX_PATH_SUFFIXES and not (prompt_tokens(request) & DOC_INDEX_PROMPT_TOKENS):
+        return False
     if has_repo_context(item, request) or has_platform_context(item, request):
         return True
     overlap = strong_prompt_overlap(item, request)
