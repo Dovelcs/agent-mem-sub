@@ -36,6 +36,8 @@ def upsert_memory_vector(memory: dict[str, Any]) -> None:
             "platform": "",
             "customer": "",
             "tags": memory.get("tags", []),
+            "status": memory.get("status", ""),
+            "expires_at": memory.get("expires_at"),
             "source_kind": source_kind(memory_item),
             "evidence_level": evidence_level(memory_item),
             "updated_at": memory.get("updated_at", ""),

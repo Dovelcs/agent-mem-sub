@@ -331,15 +331,31 @@ If vector recall is active, doc items should have nonzero `vector_score`.
 
 ## Writing Durable Memories
 
-Always check for an existing equivalent memory before writing:
+For facts discovered by `find`, `rg`, `git log`, or a focused inspection, send
+only the verified conclusion to the server-side smart writer. Do not paste raw
+search output into memory. Bind the conclusion to the actual cwd/repo/branch,
+path, platform, device, or environment so future recall can prefer the known
+answer over another SDK scan. The client should not spend extra round trips
+deciding create vs update; OpenWrt performs the same-topic check and returns
+`created`, `updated`, or `skipped`.
 
 ```sh
-python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py recall \
-  "memory title or topic to check before writing"
+python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py write-found \
+  "verified conclusion with the actual path and reuse condition" \
+  --kind rg \
+  --path path/that/was/verified \
+  --scope repo-or-platform \
+  --tag build-entry
 ```
 
-If a matching memory exists, include its `id` in `/memory/upsert` so the write
-updates that memory instead of creating another one.
+Use `write-found-batch facts.jsonl` when several conclusions are ready. Each
+JSONL row should be a small object with fields such as `fact`, `title`, `kind`,
+`path`, `tags`, `repo`, `branch`, `platform`, or `device`; the helper fills
+missing repo/branch context once and sends a single batch request.
+
+Use explicit `--title` when a later write should refine the same memory.
+Different titles are treated as separate facts even within the same scope. Use
+lower-level `write-fact` only when you already have the full payload shape.
 
 Use the bundled script when available:
 
@@ -348,6 +364,8 @@ python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py smoke
 python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py workflow-start --trunk-id current --goal "..."
 python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py workflow-update --trunk-id current --progress "..."
 python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py workflow-get --trunk-id current
+python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py write-fact "..."
+python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py write-found "..." --kind find --path ./file
 python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py prompt-template implementer
 ```
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 
-BASE_URL = os.environ.get("AGENT_MEMORY_URL", "http://127.0.0.1:18088").rstrip("/")
+BASE_URL = os.environ.get("AGENT_MEMORY_URL", "http://100.106.225.53:18088").rstrip("/")
 SKILL_DIR = Path(__file__).resolve().parents[1]
 PROMPT_DIR = SKILL_DIR / "references" / "prompts"
 
@@ -74,6 +75,173 @@ def recall(prompt: str) -> int:
         )
     )
     return 0
+
+
+def write_fact(args: argparse.Namespace) -> int:
+    payload = {
+        "fact": args.fact,
+        "type": args.type,
+        "scope": args.scope,
+        "title": args.title,
+        "tags": args.tag,
+        "source": args.source,
+        "goal": args.goal,
+        "cwd": args.cwd or os.getcwd(),
+        "repo": args.repo,
+        "branch": args.branch,
+        "platform": args.platform,
+        "device": args.device,
+        "document_path": args.document_path,
+        "environment": args.environment,
+        "confidence": args.confidence,
+        "importance": args.importance,
+        "status": args.status,
+        "update_threshold": args.update_threshold,
+        "vector": args.vector,
+    }
+    result = request_json("POST", "/memory/write_fact", payload, timeout=5.0)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result.get("ok") else 1
+
+
+def compact(text: str, limit: int = 140) -> str:
+    value = " ".join(str(text or "").split())
+    if len(value) <= limit:
+        return value
+    return value[: max(limit - 3, 0)].rstrip() + "..."
+
+
+def as_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return [str(value)]
+
+
+def run_git(cwd: str, git_args: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *git_args],
+            cwd=cwd,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=0.8,
+        )
+    except Exception:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def infer_repo_context(cwd: str) -> tuple[str, str, str]:
+    root = run_git(cwd, ["rev-parse", "--show-toplevel"])
+    branch = run_git(cwd, ["branch", "--show-current"])
+    if not branch:
+        branch = run_git(cwd, ["rev-parse", "--short", "HEAD"])
+    repo = Path(root).name if root else Path(cwd).resolve().name
+    return repo, branch, root
+
+
+def dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        item = str(value or "").strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def default_found_title(kind: str, fact: str, paths: list[str]) -> str:
+    if paths:
+        return f"{kind} result: {Path(paths[0]).name}"
+    return f"{kind} result: {compact(fact, 96)}"
+
+
+def build_found_payload(args: argparse.Namespace, record: dict[str, Any] | None = None) -> dict[str, Any]:
+    record = record or {}
+    fact = str(record.get("fact") or record.get("content") or getattr(args, "fact", "") or "").strip()
+    if not fact:
+        raise ValueError("empty fact")
+
+    kind = str(record.get("kind") or args.kind)
+    cwd = str(record.get("cwd") or args.cwd or os.getcwd())
+    paths = as_list(record.get("paths") or record.get("path") or record.get("document_path") or getattr(args, "path", []))
+    repo, branch, root = infer_repo_context(cwd)
+    repo = str(record.get("repo") or args.repo or repo)
+    branch = str(record.get("branch") or args.branch or branch)
+    platform = str(record.get("platform") or args.platform)
+    device = str(record.get("device") or args.device)
+    scope = str(record.get("scope") or args.scope or repo or platform or Path(cwd).resolve().name)
+    source = str(record.get("source") or args.source or f"codex/{kind}-result")
+    title = str(record.get("title") or args.title or default_found_title(kind, fact, paths))
+    tags = dedupe(
+        as_list(getattr(args, "tag", []))
+        + as_list(record.get("tags") or record.get("tag"))
+        + [kind, f"{kind}-result", "verified-conclusion", "scope-bound", repo, branch, platform, device]
+    )
+    environment = str(record.get("environment") or args.environment)
+    if root and root != cwd and "repo_root=" not in environment:
+        environment = "; ".join(part for part in (environment, f"repo_root={root}") if part)
+    if len(paths) > 1:
+        joined = ",".join(paths[:8])
+        environment = "; ".join(part for part in (environment, f"paths={joined}") if part)
+
+    return {
+        "fact": fact,
+        "type": str(record.get("type") or args.type),
+        "scope": scope,
+        "title": title,
+        "tags": tags,
+        "source": source,
+        "goal": str(record.get("goal") or args.goal),
+        "cwd": cwd,
+        "repo": repo,
+        "branch": branch,
+        "platform": platform,
+        "device": device,
+        "document_path": paths[0] if paths else "",
+        "environment": environment,
+        "confidence": float(record.get("confidence") or args.confidence),
+        "importance": float(record.get("importance") or args.importance),
+        "status": str(record.get("status") or args.status),
+        "update_threshold": float(record.get("update_threshold") or args.update_threshold),
+        "vector": str(record.get("vector") or args.vector),
+    }
+
+
+def write_found(args: argparse.Namespace) -> int:
+    payload = build_found_payload(args)
+    result = request_json("POST", "/memory/write_fact", payload, timeout=5.0)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result.get("ok") else 1
+
+
+def write_found_batch(args: argparse.Namespace) -> int:
+    facts: list[dict[str, Any]] = []
+    with open(args.file, "r", encoding="utf-8") as handle:
+        for lineno, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                record = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{args.file}:{lineno}: invalid JSON: {exc}") from exc
+            if not isinstance(record, dict):
+                raise ValueError(f"{args.file}:{lineno}: expected JSON object")
+            facts.append(build_found_payload(args, record))
+    result = request_json("POST", "/memory/write_facts", {"facts": facts, "vector": args.vector}, timeout=max(5.0, len(facts) * 0.5))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result.get("ok") else 1
 
 
 def parse_milestones(values: list[str]) -> list[Any]:
@@ -213,6 +381,56 @@ def main() -> int:
     recall_parser = sub.add_parser("recall")
     recall_parser.add_argument("prompt")
 
+    write_fact_parser = sub.add_parser("write-fact")
+    write_fact_parser.add_argument("fact")
+    write_fact_parser.add_argument("--type", default="project_fact")
+    write_fact_parser.add_argument("--scope", default="")
+    write_fact_parser.add_argument("--title", default="")
+    write_fact_parser.add_argument("--tag", action="append", default=[])
+    write_fact_parser.add_argument("--source", default="agent-memory/write_fact")
+    write_fact_parser.add_argument("--goal", default="")
+    write_fact_parser.add_argument("--cwd", default="")
+    write_fact_parser.add_argument("--repo", default="")
+    write_fact_parser.add_argument("--branch", default="")
+    write_fact_parser.add_argument("--platform", default="")
+    write_fact_parser.add_argument("--device", default="")
+    write_fact_parser.add_argument("--document-path", default="")
+    write_fact_parser.add_argument("--environment", default="")
+    write_fact_parser.add_argument("--confidence", type=float, default=0.85)
+    write_fact_parser.add_argument("--importance", type=float, default=0.65)
+    write_fact_parser.add_argument("--status", default="active")
+    write_fact_parser.add_argument("--update-threshold", type=float, default=0.75)
+    write_fact_parser.add_argument("--vector", choices=["async", "sync", "none"], default="async")
+
+    def add_found_options(found_parser: argparse.ArgumentParser) -> None:
+        found_parser.add_argument("--kind", choices=["find", "rg", "git-log", "manual"], default="find")
+        found_parser.add_argument("--type", default="project_fact")
+        found_parser.add_argument("--scope", default="")
+        found_parser.add_argument("--title", default="")
+        found_parser.add_argument("--path", action="append", default=[])
+        found_parser.add_argument("--tag", action="append", default=[])
+        found_parser.add_argument("--source", default="")
+        found_parser.add_argument("--goal", default="")
+        found_parser.add_argument("--cwd", default="")
+        found_parser.add_argument("--repo", default="")
+        found_parser.add_argument("--branch", default="")
+        found_parser.add_argument("--platform", default="")
+        found_parser.add_argument("--device", default="")
+        found_parser.add_argument("--environment", default="")
+        found_parser.add_argument("--confidence", type=float, default=0.85)
+        found_parser.add_argument("--importance", type=float, default=0.65)
+        found_parser.add_argument("--status", default="active")
+        found_parser.add_argument("--update-threshold", type=float, default=0.75)
+        found_parser.add_argument("--vector", choices=["async", "sync", "none"], default="async")
+
+    write_found_parser = sub.add_parser("write-found", help="Write one verified find/rg/git-log conclusion with repo/path context.")
+    write_found_parser.add_argument("fact")
+    add_found_options(write_found_parser)
+
+    write_found_batch_parser = sub.add_parser("write-found-batch", help="Write JSONL verified conclusions in one server-side batch.")
+    write_found_batch_parser.add_argument("file")
+    add_found_options(write_found_batch_parser)
+
     start_parser = sub.add_parser("workflow-start")
     start_parser.add_argument("--trunk-id", required=True)
     start_parser.add_argument("--title", default="")
@@ -263,6 +481,12 @@ def main() -> int:
             return smoke()
         if args.cmd == "recall":
             return recall(args.prompt)
+        if args.cmd == "write-fact":
+            return write_fact(args)
+        if args.cmd == "write-found":
+            return write_found(args)
+        if args.cmd == "write-found-batch":
+            return write_found_batch(args)
         if args.cmd == "workflow-start":
             return workflow_start(args)
         if args.cmd == "workflow-update":

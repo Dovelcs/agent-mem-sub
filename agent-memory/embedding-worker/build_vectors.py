@@ -31,7 +31,7 @@ def rows_for_source(conn: sqlite3.Connection, source_type: str, limit: int, min_
             args = (min_id,) + args
         rows = conn.execute(
             f"""
-            SELECT id, title, content, tags, updated_at
+            SELECT id, title, content, tags, status, expires_at, updated_at
             FROM memories
             {where}
             ORDER BY id
@@ -95,6 +95,8 @@ def point_for_item(source_type: str, item: dict[str, Any], vector: list[float]) 
                 "platform": "",
                 "customer": "",
                 "tags": read_json(item.get("tags"), []),
+                "status": item.get("status", ""),
+                "expires_at": item.get("expires_at"),
                 "source_kind": "memory",
                 "evidence_level": "inferred",
                 "updated_at": item.get("updated_at", ""),

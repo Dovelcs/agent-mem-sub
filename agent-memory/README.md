@@ -28,8 +28,10 @@ docker-compose up -d
 /etc/init.d/agent-memory restart
 ```
 
-The API binds to `127.0.0.1:18088` on this OpenWrt target because `8088` is
-already occupied by an existing local service. Qdrant binds to `127.0.0.1:6333`.
+The API uses port `18088` on this OpenWrt target because `8088` is already
+occupied by an existing local service. The deployed procd service listens on
+`0.0.0.0:18088` so Codex can call it directly over Tailscale, while nft limits
+access to `lo` and `tailscale0`. Qdrant still binds to `127.0.0.1:6333`.
 
 ## Initialize And Check
 
@@ -69,6 +71,57 @@ curl -s http://127.0.0.1:18088/memory/upsert \
     "confidence": 0.95,
     "status": "pinned"
   }'
+```
+
+## Smart Fact Write
+
+For facts discovered by `find`, `rg`, or `git log`, prefer one server-side
+smart write request. The client sends the verified conclusion and binding
+context once; OpenWrt decides whether to create, update, or skip the memory.
+SQLite is written before the response and vector sync is queued by default.
+
+```sh
+curl -s http://100.106.225.53:18088/memory/write_fact \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "fact": "RK3568 R62 build entry is source build-quec.sh, then select the Yocto route.",
+    "type": "project_fact",
+    "scope": "rk3568-r62",
+    "title": "RK3568 R62 build entrypoint",
+    "cwd": "/home/donovan/samba/RK3568/RK3568_Linux6.1_R62_rkr5",
+    "repo": "RK3568_Linux6.1_R62_rkr5",
+    "branch": "QSM368ZP_rl",
+    "tags": ["rk3568", "r62", "build-entry", "find-result"],
+    "source": "codex/find-result",
+    "vector": "async"
+  }'
+```
+
+Responses include `action: created|updated|skipped`, `memory_id`, `vector:
+queued|updated|skipped`, and `ms`.
+
+For agent-side use, prefer the bundled thin formatter. It records the
+conclusion plus cwd/repo/branch/path context without storing raw command output:
+
+```sh
+python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py write-found \
+  "RK3568 R62 build entry is source build-quec.sh, then select the Yocto route." \
+  --kind rg \
+  --path build-quec.sh \
+  --scope RK3568_Linux6.1_R62_rkr5 \
+  --tag build-entry
+```
+
+Batch JSONL writes use `/memory/write_facts` so the OpenWrt service still owns
+dedupe and update decisions:
+
+```jsonl
+{"fact":"SDK A build entry is ./build.sh in the repo root.","kind":"find","path":"build.sh","title":"SDK A build entry"}
+{"fact":"SDK A packaging helper is scripts/repack.sh for arm64 camera packages.","kind":"rg","path":"scripts/repack.sh","title":"SDK A package helper"}
+```
+
+```sh
+python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py write-found-batch /tmp/facts.jsonl
 ```
 
 ## Recall Test
@@ -210,6 +263,8 @@ MCP resources:
 - `GET /health`
 - `POST /memory/upsert`
 - `POST /memory/search`
+- `POST /memory/write_fact`
+- `POST /memory/write_facts`
 - `POST /docs/ingest`
 - `POST /docs/search`
 - `POST /recall`

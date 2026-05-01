@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from pydantic import BaseModel, Field
 
 from db import (
@@ -16,7 +17,7 @@ from db import (
 )
 from embedding import Embedder
 from ingest_docs import ingest_path
-from memory_suggest import suggest_memory
+from memory_suggest import suggest_memory, write_fact
 from qdrant_client import QdrantLite
 from recall_core import build_recall as build_recall_payload
 from recall_core import select_bucketed_doc_chunks
@@ -91,6 +92,36 @@ class MemorySuggestRequest(BaseModel):
     limit: int = 5
 
 
+class MemoryWriteFactRequest(BaseModel):
+    fact: str = ""
+    type: str = "project_fact"
+    scope: str = ""
+    title: str = ""
+    tags: list[str] | str = Field(default_factory=list)
+    source: str = "agent-memory/write_fact"
+    goal: str = ""
+    cwd: str = ""
+    repo: str = ""
+    branch: str = ""
+    platform: str = ""
+    device: str = ""
+    document_path: str = ""
+    environment: str = ""
+    confidence: float = 0.85
+    importance: float = 0.65
+    status: str = "active"
+    expires_at: str | None = None
+    update_threshold: float = 0.75
+    limit: int = 8
+    vector: str = "async"
+
+
+class MemoryWriteFactsRequest(BaseModel):
+    facts: list[MemoryWriteFactRequest] = Field(default_factory=list)
+    vector: str = "async"
+    stop_on_error: bool = False
+
+
 class TrunkRequest(BaseModel):
     trunk_id: str = ""
     conversation_id: str = ""
@@ -142,6 +173,24 @@ def build_recall(request: RecallRequest) -> dict[str, Any]:
     return build_recall_payload(_model_data(request))
 
 
+def _queue_memory_vector(result: dict[str, Any], vector_mode: str, background_tasks: BackgroundTasks) -> None:
+    memory = result.get("memory") or {}
+    if not (result.get("ok") and result.get("action") in {"created", "updated"} and memory):
+        result["vector"] = result.get("vector") or "skipped"
+        return
+    if vector_mode == "sync":
+        try:
+            upsert_memory_vector(memory)
+            result["vector"] = "updated"
+        except Exception:
+            result["vector"] = "skipped"
+    elif vector_mode != "none":
+        background_tasks.add_task(upsert_memory_vector, memory)
+        result["vector"] = "queued"
+    else:
+        result["vector"] = "skipped"
+
+
 @app.on_event("startup")
 def startup() -> None:
     init_db()
@@ -177,6 +226,50 @@ def memory_suggest(req: MemorySuggestRequest) -> dict[str, Any]:
     data = _model_data(req)
     data["tags"] = _as_list(data.get("tags"))
     return suggest_memory(data)
+
+
+@app.post("/memory/write_fact")
+def memory_write_fact(req: MemoryWriteFactRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    data = _model_data(req)
+    data["tags"] = _as_list(data.get("tags"))
+    result = write_fact(data)
+    vector_mode = str(data.get("vector") or "async")
+    _queue_memory_vector(result, vector_mode, background_tasks)
+    return result
+
+
+@app.post("/memory/write_facts")
+def memory_write_facts(req: MemoryWriteFactsRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    started = time.perf_counter()
+    items: list[dict[str, Any]] = []
+    for fact_req in req.facts:
+        try:
+            data = _model_data(fact_req)
+            set_data = _model_data_set(fact_req)
+            data["tags"] = _as_list(data.get("tags"))
+            result = write_fact(data)
+            vector_mode = str(set_data.get("vector") or req.vector or "async")
+            _queue_memory_vector(result, vector_mode, background_tasks)
+        except Exception as exc:
+            result = {"ok": False, "action": "failed", "error": str(exc), "vector": "skipped"}
+        items.append(result)
+        if req.stop_on_error and not result.get("ok"):
+            break
+    counts = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+    for item in items:
+        if not item.get("ok"):
+            counts["failed"] += 1
+            continue
+        action = str(item.get("action") or "skipped")
+        if action in counts:
+            counts[action] += 1
+    return {
+        "ok": counts["failed"] == 0,
+        "count": len(items),
+        **counts,
+        "items": items,
+        "ms": round((time.perf_counter() - started) * 1000, 2),
+    }
 
 
 @app.post("/docs/ingest")

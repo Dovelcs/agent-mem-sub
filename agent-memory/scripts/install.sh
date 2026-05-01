@@ -40,15 +40,28 @@ START=95
 STOP=10
 USE_PROCD=1
 
+setup_agent_memory_guard() {
+  command -v nft >/dev/null 2>&1 || return 0
+  nft delete table inet agent_memory_guard 2>/dev/null || true
+  nft add table inet agent_memory_guard
+  nft 'add chain inet agent_memory_guard input { type filter hook input priority -5; policy accept; }'
+  nft add rule inet agent_memory_guard input tcp dport 18088 iifname != "tailscale0" iifname != "lo" drop
+}
+
 start_service() {
+  setup_agent_memory_guard
   procd_open_instance
-  procd_set_param command /opt/agent-memory/venv/bin/uvicorn server:app --app-dir /opt/agent-memory/app --host 127.0.0.1 --port 18088
+  procd_set_param command /opt/agent-memory/venv/bin/uvicorn server:app --app-dir /opt/agent-memory/app --host 0.0.0.0 --port 18088
   procd_set_param env PYTHONPATH=/opt/agent-memory/app
   procd_set_param env AGENT_MEMORY_CONFIG=/opt/agent-memory/app/config.yaml
   procd_set_param respawn 3600 5 5
   procd_set_param stdout 1
   procd_set_param stderr 1
   procd_close_instance
+}
+
+stop_service() {
+  command -v nft >/dev/null 2>&1 && nft delete table inet agent_memory_guard 2>/dev/null || true
 }
 SERVICE
 chmod +x /etc/init.d/agent-memory

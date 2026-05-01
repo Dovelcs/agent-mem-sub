@@ -208,6 +208,26 @@ def search_memories(query: str, limit: int = 20) -> list[dict[str, Any]]:
         return [row_to_dict(row) or {} for row in rows]
 
 
+def get_memories_by_ids(ids: list[int]) -> list[dict[str, Any]]:
+    unique_ids = [int(item_id) for item_id in dict.fromkeys(ids) if int(item_id) > 0]
+    if not unique_ids:
+        return []
+    placeholders = ",".join("?" for _ in unique_ids)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT memories.*, 0.0 AS text_score
+            FROM memories
+            WHERE id IN ({placeholders})
+              AND status IN ('active','pinned')
+              AND (expires_at IS NULL OR expires_at > datetime('now'))
+            """,
+            unique_ids,
+        ).fetchall()
+    by_id = {int(row["id"]): row_to_dict(row) or {} for row in rows}
+    return [by_id[item_id] for item_id in unique_ids if item_id in by_id]
+
+
 def search_document_chunks(query: str, limit: int = 20) -> list[dict[str, Any]]:
     fts = make_fts_query(query)
     with connect() as conn:
@@ -239,6 +259,26 @@ def search_document_chunks(query: str, limit: int = 20) -> list[dict[str, Any]]:
                 (fts, limit),
             ).fetchall()
         return [row_to_dict(row) or {} for row in rows]
+
+
+def get_document_chunks_by_ids(ids: list[int]) -> list[dict[str, Any]]:
+    unique_ids = [int(item_id) for item_id in dict.fromkeys(ids) if int(item_id) > 0]
+    if not unique_ids:
+        return []
+    placeholders = ",".join("?" for _ in unique_ids)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT document_chunks.*, documents.title AS title, documents.project,
+                   documents.platform, documents.customer, 0.0 AS text_score
+            FROM document_chunks
+            JOIN documents ON documents.id = document_chunks.document_id
+            WHERE document_chunks.id IN ({placeholders})
+            """,
+            unique_ids,
+        ).fetchall()
+    by_id = {int(row["id"]): row_to_dict(row) or {} for row in rows}
+    return [by_id[item_id] for item_id in unique_ids if item_id in by_id]
 
 
 def mark_memories_used(ids: list[int]) -> None:

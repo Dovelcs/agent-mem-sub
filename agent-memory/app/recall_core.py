@@ -5,6 +5,8 @@ from typing import Any
 
 from db import (
     CONFIG,
+    get_document_chunks_by_ids,
+    get_memories_by_ids,
     get_pinned_memories,
     mark_memories_used,
     search_document_chunks,
@@ -182,6 +184,29 @@ def vector_items(request: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
+def merge_candidate(
+    target: dict[int, dict[str, Any]],
+    item: dict[str, Any],
+    key: int,
+    source_type: str,
+    vector_score: float = 0.0,
+) -> None:
+    item["source_type"] = source_type
+    existing = target.get(key)
+    if not existing:
+        if vector_score:
+            item["vector_score"] = vector_score
+        target[key] = item
+        return
+    if float(item.get("text_score") or 0) > float(existing.get("text_score") or 0):
+        preserved_vector = max(float(existing.get("vector_score") or 0), vector_score)
+        existing.update(item)
+        if preserved_vector:
+            existing["vector_score"] = preserved_vector
+    elif vector_score:
+        existing["vector_score"] = max(float(existing.get("vector_score") or 0), vector_score)
+
+
 def diversify_doc_chunks(
     items: list[dict[str, Any]], limit: int, max_per_document: int = 1, allow_overflow: bool = False
 ) -> list[dict[str, Any]]:
@@ -330,29 +355,29 @@ def build_recall(payload: dict[str, Any]) -> dict[str, Any]:
 
     memory_map: dict[int, dict[str, Any]] = {}
     for item in get_pinned_memories(limit=max(limit_memories, 5)) + search_memories(expanded_prompt, fts_limit):
-        item["source_type"] = "memory"
-        key = int(item["id"])
-        if key not in memory_map or item.get("text_score", 0) > memory_map[key].get("text_score", 0):
-            memory_map[key] = item
+        merge_candidate(memory_map, item, int(item["id"]), "memory")
 
     doc_map: dict[int, dict[str, Any]] = {}
     for item in search_document_chunks(expanded_prompt, fts_limit):
-        item["source_type"] = "doc_chunk"
-        doc_map[int(item["id"])] = item
+        merge_candidate(doc_map, item, int(item["id"]), "doc_chunk")
 
+    vector_memory_scores: dict[int, float] = {}
+    vector_doc_scores: dict[int, float] = {}
     for item in vector_items(request):
         if item.get("source_type") == "memory" and item.get("item_id"):
             key = int(item["item_id"])
-            memory_map.setdefault(key, item)
-            memory_map[key]["vector_score"] = max(
-                float(memory_map[key].get("vector_score") or 0), float(item.get("vector_score") or 0)
-            )
+            vector_memory_scores[key] = max(vector_memory_scores.get(key, 0.0), float(item.get("vector_score") or 0))
         elif item.get("source_type") == "doc_chunk" and item.get("item_id"):
             key = int(item["item_id"])
-            doc_map.setdefault(key, item)
-            doc_map[key]["vector_score"] = max(
-                float(doc_map[key].get("vector_score") or 0), float(item.get("vector_score") or 0)
-            )
+            vector_doc_scores[key] = max(vector_doc_scores.get(key, 0.0), float(item.get("vector_score") or 0))
+
+    for item in get_memories_by_ids(list(vector_memory_scores.keys())):
+        key = int(item["id"])
+        merge_candidate(memory_map, item, key, "memory", vector_memory_scores.get(key, 0.0))
+
+    for item in get_document_chunks_by_ids(list(vector_doc_scores.keys())):
+        key = int(item["id"])
+        merge_candidate(doc_map, item, key, "doc_chunk", vector_doc_scores.get(key, 0.0))
 
     ranked_memory_candidates = rerank(list(memory_map.values()), request)
     ranked_memories = select_typed_memories(ranked_memory_candidates, limit_memories)
