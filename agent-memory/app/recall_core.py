@@ -18,6 +18,171 @@ from intent import expand_prompt, expansion_trace
 from rerank import rerank
 
 
+GENERIC_DOC_TOKENS = {
+    "server",
+    "service",
+    "guide",
+    "developer",
+    "development",
+    "linux",
+    "android",
+    "rockchip",
+    "rk",
+    "docs",
+    "doc",
+    "pdf",
+    "txt",
+    "cn",
+    "en",
+    "问题",
+    "修复",
+    "调试",
+    "定位",
+    "实现",
+}
+HARDWARE_DOC_TOKENS = {
+    "ab",
+    "ota",
+    "uboot",
+    "u-boot",
+    "dts",
+    "dtsi",
+    "kernel",
+    "driver",
+    "gpio",
+    "i2c",
+    "spi",
+    "uart",
+    "usb",
+    "adb",
+    "fastboot",
+    "upgrade_tool",
+    "rkdeveloptool",
+    "loader",
+    "maskrom",
+    "分区",
+    "烧录",
+    "升级",
+    "驱动",
+    "设备树",
+    "文档",
+}
+HOST_INDEX_SCOPES = {"host-git-checkouts"}
+HOST_INDEX_TOKENS = {
+    "checkout",
+    "origin",
+    "remote",
+    "git路径",
+    "仓库路径",
+    "仓库地址",
+    "检出路径",
+    "本机路径",
+    "检出",
+}
+
+
+def tokens(value: str) -> set[str]:
+    result: set[str] = set()
+    for token in re.findall(r"[\w./:-]{2,}|[\u4e00-\u9fff]{2,}", value or ""):
+        lowered = token.lower()
+        result.add(lowered)
+        for part in re.split(r"[_./:-]+", lowered):
+            if len(part) >= 2:
+                result.add(part)
+    return result
+
+
+def item_blob(item: dict[str, Any]) -> str:
+    return " ".join(
+        str(item.get(key) or "")
+        for key in (
+            "title",
+            "heading",
+            "content",
+            "path",
+            "scope",
+            "source",
+            "project",
+            "platform",
+            "customer",
+            "tags",
+        )
+    )
+
+
+def repo_aliases(request: dict[str, Any]) -> set[str]:
+    aliases: set[str] = set()
+    for key in ("repo", "cwd"):
+        value = str(request.get(key) or "").strip()
+        if not value:
+            continue
+        aliases.add(value.lower())
+        parts = [part for part in re.split(r"[/\\]+", value.lower()) if part]
+        if key == "repo" and parts:
+            aliases.add(parts[-1])
+    return aliases
+
+
+def has_repo_context(item: dict[str, Any], request: dict[str, Any]) -> bool:
+    blob = item_blob(item).lower()
+    path = str(item.get("path") or "").lower()
+    scope = str(item.get("scope") or "").lower()
+    tags = " ".join(str(tag).lower() for tag in item.get("tags") or [])
+    for alias in repo_aliases(request):
+        if not alias:
+            continue
+        if "/" in alias and alias in blob:
+            return True
+        if alias and alias in {scope}:
+            return True
+        if alias and (alias in path or alias in tags):
+            return True
+    return False
+
+
+def prompt_tokens(request: dict[str, Any]) -> set[str]:
+    prompt = str(request.get("original_prompt") or request.get("prompt") or "")
+    return tokens(prompt)
+
+
+def strong_prompt_overlap(item: dict[str, Any], request: dict[str, Any]) -> set[str]:
+    useful_prompt_tokens = {
+        token for token in prompt_tokens(request) if token not in GENERIC_DOC_TOKENS and len(token) >= 2
+    }
+    return useful_prompt_tokens & tokens(item_blob(item))
+
+
+def has_platform_context(item: dict[str, Any], request: dict[str, Any]) -> bool:
+    scope = str(item.get("reuse_scope") or "")
+    if scope in {"same_platform", "same_family"}:
+        return True
+    request_platforms = re.findall(r"(?<![a-z0-9])(rk\d{4}[a-z]?|rv\d{4}[a-z]?|qsm\d+|qsc\d+|sg\d+|sh\d+)(?![a-z0-9])", " ".join(str(request.get(k) or "") for k in ("original_prompt", "prompt", "cwd", "repo", "branch")).lower())
+    return bool(request_platforms and request_platforms[0] in item_blob(item).lower())
+
+
+def memory_applicable(item: dict[str, Any], request: dict[str, Any]) -> bool:
+    memory_type = str(item.get("type") or "")
+    scope = str(item.get("scope") or "").lower()
+    if scope in HOST_INDEX_SCOPES:
+        return bool(prompt_tokens(request) & HOST_INDEX_TOKENS)
+    if memory_type in {"project_fact", "hardware_debug", "project"}:
+        return has_repo_context(item, request) or has_platform_context(item, request)
+    return True
+
+
+def doc_applicable(item: dict[str, Any], request: dict[str, Any]) -> bool:
+    if has_repo_context(item, request) or has_platform_context(item, request):
+        return True
+    overlap = strong_prompt_overlap(item, request)
+    if not overlap:
+        return False
+    prompt = prompt_tokens(request)
+    if prompt & HARDWARE_DOC_TOKENS:
+        return True
+    kind = str(item.get("source_kind") or "")
+    return kind not in {"official_doc", "dts", "config", "repo_code"}
+
+
 def snippet(text: str, limit: int) -> str:
     text = re.sub(r"\s+", " ", text or "").strip()
     if len(text) <= limit:
@@ -379,9 +544,13 @@ def build_recall(payload: dict[str, Any]) -> dict[str, Any]:
         key = int(item["id"])
         merge_candidate(doc_map, item, key, "doc_chunk", vector_doc_scores.get(key, 0.0))
 
-    ranked_memory_candidates = rerank(list(memory_map.values()), request)
+    ranked_memory_candidates = [
+        item for item in rerank(list(memory_map.values()), request) if memory_applicable(item, request)
+    ]
     ranked_memories = select_typed_memories(ranked_memory_candidates, limit_memories)
-    ranked_doc_candidates = rerank(list(doc_map.values()), request)
+    ranked_doc_candidates = [
+        item for item in rerank(list(doc_map.values()), request) if doc_applicable(item, request)
+    ]
     ranked_docs = select_bucketed_doc_chunks(ranked_doc_candidates, limit_docs)
 
     mark_memories_used([int(item["id"]) for item in ranked_memories if item.get("id")])

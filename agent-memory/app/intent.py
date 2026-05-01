@@ -10,11 +10,11 @@ ALIASES: list[tuple[re.Pattern[str], str]] = [
         " decision_policy route_guard verified_route pitfall fastboot upgrade_tool rkdeveloptool OTA update.img partition Loader Maskrom adb usb transport route selection 烧录 升级 镜像 路线选择 优先级",
     ),
     (
-        re.compile(r"(连接|登录|ssh|server|服务器|设备|密码|账号|凭据|credential|ip|tailscale)", re.I),
+        re.compile(r"(连接|登录|ssh|服务器|设备|密码|账号|凭据|credential|ip|tailscale)", re.I),
         " credential_location agent_route pitfall ssh alias wrapper mcp tailscale ip user password secret 凭据 账号 密码 连接 设备",
     ),
     (
-        re.compile(r"(mcp|hook|codex|agent|记忆|召回|memory|qdrant|embedding)", re.I),
+        re.compile(r"(mcp|hook|agent-memory|记忆|召回|memory|qdrant|embedding)", re.I),
         " agent-memory recall route_guard pitfall workflow_policy memory-taxonomy UserPromptSubmit Qdrant embedding FTS MCP skill 记忆分类 召回路线",
     ),
     (
