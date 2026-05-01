@@ -14,6 +14,12 @@ Use `openwrt-agent-memory` as the single local workflow router.
 - Long-running operations: keep the current route, command, timeout, and next
   poll action in the trunk.
 - Live OpenWrt work: prefer MCP/runtime proof over static assumptions.
+- For former `codex-orchestrator flow`, run: recall when useful, trunk start,
+  spec-lite or formal docs-first gate, implementation, review, trunk finish.
+- For former `codex-orchestrator doctor/status --watch`, keep observation,
+  command, timeout, stall policy, and next poll action in the trunk.
+- For former `codex-orchestrator review`, run findings-first review and capture
+  residual risk plus verification in the trunk.
 
 ## Checkpoints
 
@@ -25,9 +31,24 @@ Use `openwrt-agent-memory` as the single local workflow router.
 - Before handoff: run the smallest verification that proves the requested
   behavior, then record reusable lessons with `memory_suggest` when appropriate.
 
+## Intent Router Parity
+
+- Task/spec scaffolding and mirror sync: use `spec-lite.md`; when formal mode is
+  required, create PRD, TECH_SPEC, ACTION_PLAN, task checklist, and mirrors.
+- Delegation or subagent evidence discipline: use `subagent-execution.md`.
+- Stream decomposition: split only into independent bounded work with disjoint
+  write scopes.
+- Option analysis and tradeoffs: record the decision frame in trunk; use recall
+  for prior route guards and pitfalls.
+- Long-running checks: use trunk progress notes as the status stream.
+- Implementation checkpoint and final handoff: spec review first, code quality
+  review second, integrated final review for multi-task work.
+- Release/eval helpers are not absorbed here; restore their archived skills
+  only when explicitly needed.
+
 ## Archived Sources
 
-This router keeps the useful ideas from `codex-orchestrator`: explicit routing,
-MCP as the preferred control plane for live systems, bounded delegation,
-long-running status checks, and review checkpoints. It intentionally avoids
-requiring the old orchestrator CLI for normal local work.
+This router replaces `codex-orchestrator` for the user's local workflow. It does
+not require the old orchestrator CLI, but it preserves the workflow semantics:
+explicit route choice, MCP/runtime proof when applicable, docs-first gate when
+needed, bounded delegation, long-running status checks, and review checkpoints.

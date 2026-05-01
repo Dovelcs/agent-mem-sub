@@ -209,7 +209,10 @@ BASELINE_MEMORIES: list[dict[str, Any]] = [
             "into this skill and archived under skills.disabled for rollback. "
             "For requests about writing plans, maintaining the main trunk, "
             "dispatching subagents, or running spec/code review checkpoints, "
-            "use this unified workflow route."
+            "use this unified workflow route. Memory recall is used for fast "
+            "route correction; long-task workflow mechanics, formal docs-first "
+            "mode, worker dispatch, status handling, and two-stage review are "
+            "implemented as skill rules rather than delegated to memory alone."
         ),
         "tags": [
             "openwrt-agent-memory",

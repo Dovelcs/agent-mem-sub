@@ -102,6 +102,126 @@ do not activate those skills separately unless they are restored for rollback.
   can recover the goal, current route, finished milestones, open blockers, and
   next action without rereading the whole conversation.
 
+Memory recall and workflow execution are separate responsibilities:
+
+- Use recall for fast route correction: prior environment failures, blocked
+  commands, wrong device assumptions, credentials/source locations, route
+  guards, and verified shortcuts.
+- Do not use recall as a replacement for workflow mechanics. Long task
+  planning, trunk updates, worker dispatch, status handling, spec review, code
+  review, and final handoff must follow the process below even when recall is
+  fast.
+- When a route fails twice or an environment assumption is uncertain, pause the
+  current route, run recall with the exact failure plus goal/cwd/repo/platform,
+  update the trunk with the route pivot, then continue with the workflow.
+
+## Absorbed Skill Parity
+
+This section is the canonical replacement for the archived workflow skills.
+Treat it as capability parity, not a loose summary.
+
+### Codex-Orchestrator Parity
+
+- This skill is the default workflow router for hands-on development,
+  debugging, implementation, long tasks, and multi-step repo/device execution.
+- Keep MCP or other runtime tools as the control plane when they are the
+  shortest live proof path. Keep execution lanes explicit: local shell,
+  OpenWrt/MCP, background process, browser, or remote service.
+- Equivalent flow for former `codex-orchestrator flow`:
+  1. Run route-selection recall when prior facts may matter.
+  2. Start or activate a trunk.
+  3. Choose direct, spec-lite, formal docs-first, or subagent execution mode.
+  4. Execute with milestone updates.
+  5. Run spec/review checkpoints.
+  6. Finish the trunk and suggest durable memory only for reusable lessons.
+- Equivalent flow for former `doctor/status --watch`: put the command, timeout,
+  last observation, stall threshold, and next poll action into the trunk; report
+  progress without rereading the whole task.
+- Equivalent flow for former `review`: findings-first code review, then
+  residual risk and verification summary.
+- Intent routing:
+  - Task/spec scaffolding: use the docs-first parity below.
+  - Delegation/subagents: use the subagent parity below.
+  - Option analysis: keep the decision frame in the trunk and use recall for
+    prior route guards.
+  - Long-running checks: keep status and polling state in the trunk.
+  - Final handoff: run spec compliance before code quality, then a concise
+    final result.
+
+### Docs-First Parity
+
+Use docs-first mode when the user asks for formal planning docs, the repo
+requires task/spec artifacts, the work is customer-facing, or the change is
+high-risk enough that a stable written contract is needed.
+
+Formal docs-first mode must do all of the following before implementation:
+
+1. Draft or refresh PRD, TECH_SPEC, and ACTION_PLAN.
+   - PRD captures user intent and a concise translation of the request.
+   - TECH_SPEC captures technical requirements, constraints, interfaces, and
+     acceptance criteria.
+   - ACTION_PLAN captures milestones, sequencing, verification, and rollback.
+2. Register the task/spec when the repo has a task system:
+   - Add or update `tasks/index.json` when present.
+   - Create or refresh a task checklist such as `tasks/tasks-*.md`.
+   - Mirror to `.agent/task/` and update `docs/TASKS.md` when those paths
+     already exist in the repo.
+3. Run a docs/spec review before implementation. If no external docs-review
+   command exists, perform the review inline: check that requirements,
+   non-goals, acceptance tests, affected files, and risks are explicit.
+4. Keep docs aligned as understanding changes. If implementation discovers a
+   new constraint, update the spec/trunk before continuing.
+
+Micro-task shortcut:
+
+- For small low-risk edits, use spec-lite in the trunk instead of full docs.
+- The shortcut still needs goal, constraints, milestones, verification, risks,
+  and next action.
+
+### Subagent-Driven Development Parity
+
+Use this mode when there is an implementation plan, tasks are mostly
+independent, and the active tool policy allows focused workers/subagents.
+
+Controller process:
+
+1. Read the plan once. Extract every task with complete task text, context,
+   ownership boundary, target files, and acceptance checks.
+2. Keep the task list in the trunk or active plan state.
+3. Dispatch a fresh worker per task. Do not make the worker read a large plan
+   file; paste the complete task and curated context into the prompt.
+4. If the worker asks questions, answer before implementation continues.
+5. After implementation, handle status exactly:
+   - `DONE`: proceed to spec compliance review.
+   - `DONE_WITH_CONCERNS`: inspect concerns; resolve correctness/scope concerns
+     before review.
+   - `NEEDS_CONTEXT`: provide missing context and re-dispatch.
+   - `BLOCKED`: change something: add context, use a stronger model, split the
+     task, fix the plan, or escalate.
+6. Run spec compliance review first. If issues are found, send them back to the
+   implementer and re-review.
+7. Run code quality review only after spec compliance passes. If issues are
+   found, fix and re-review.
+8. Mark the task complete only after both reviews pass.
+9. After all tasks, run an integrated final review for cross-task regressions.
+
+Model and dispatch guidance:
+
+- Mechanical isolated tasks can use faster workers.
+- Multi-file integration/debugging needs a stronger worker.
+- Architecture and review tasks need the strongest available reviewer.
+- Keep worker write scopes disjoint. Do not dispatch parallel writers to the
+  same files.
+
+Red lines:
+
+- Do not skip spec review or code quality review.
+- Do not start code quality review before spec compliance passes.
+- Do not ignore `BLOCKED` or retry unchanged.
+- Do not accept "close enough" when review found issues.
+- Do not let implementer self-review replace independent review.
+- Do not move to the next task while review issues remain open.
+
 Reference files:
 
 - `references/workflow-router.md` - task routing and checkpoint rules.
