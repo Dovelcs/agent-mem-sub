@@ -7,24 +7,12 @@ metadata:
 
 # OpenWrt Agent Memory
 
-## Runtime Facts
+## Memory Source Policy
 
-- Target: OpenWrt soft router reachable through the `ssh_openwrt` MCP.
-- Root: `/opt/agent-memory`.
-- API: `http://127.0.0.1:18088`.
-- Qdrant: `http://127.0.0.1:6333`, collection `agent_chunks`.
-- Embedding sidecar: `http://127.0.0.1:18089`, model `intfloat/multilingual-e5-small`.
-- Local Codex hook: `~/.codex/config.toml` has a `UserPromptSubmit`
-  command hook that runs `~/.codex/bin/agent-memory-recall-hook.py`.
-- Local tunnel: `agent-memory-forward.service` maps host
-  `127.0.0.1:18088` to the OpenWrt API over SSH.
-- Storage mount: `/dev/sda2` ext4 label `AGENT_MEMORY`, mounted at `/mnt/agent-memory-store`.
-- Storage links:
-  - `/opt/agent-memory/agent.db`
-  - `/opt/agent-memory/docs`
-  - `/opt/agent-memory/data`
-  - `/opt/agent-memory/qdrant_storage`
-  all resolve under `/mnt/agent-memory-store/agent-memory`.
+The database is the only source for durable memory facts. Do not duplicate
+runtime topology, credentials, performance baselines, storage layout, or other
+recallable facts in this skill or helper scripts. This skill keeps behavior and
+workflow rules only; retrieve facts through recall or `/memory/search`.
 
 ## Operating Rules
 
@@ -69,10 +57,10 @@ metadata:
    over generic docs. Treat the selected route as provisional until the current
    transport/environment is verified.
 12. At the end of each OpenWrt agent-memory task, do a short maintenance check:
-   if the task exposed a reusable operational pitfall, fixed sequence, or safety
-   rule, update this skill directly; if it produced a stable deployment fact,
-   update an existing memory or create a concise new one; if it produced long
-   evidence, put it in docs/index instead of SKILL.md.
+   if the task exposed a reusable operational pitfall, fixed sequence, or stable
+   deployment fact, update an existing memory or create a concise new one. Only
+   update this skill when the agent's behavior or workflow rules must change.
+   Put long evidence in docs/index instead of SKILL.md.
 
 ## Unified Workflow Entry
 
@@ -316,34 +304,27 @@ not in local plan text.
 
 ## Quick Checks
 
-Run on OpenWrt:
+Use helper commands first; retrieve concrete topology, container names, storage
+paths, and tunnel details from memory before running low-level checks.
 
 ```sh
-curl -s http://127.0.0.1:18088/health
-curl -s --max-time 3 http://127.0.0.1:18089/health
-systemctl --user is-active agent-memory-forward.service
-printf '%s' '{"prompt":"RK3568 CAN1 I2C3 复用冲突","cwd":"/tmp"}' | \
-  python3 ~/.codex/bin/agent-memory-recall-hook.py
-docker inspect -f '{{.Name}} restart={{.HostConfig.RestartPolicy.Name}} status={{.State.Status}}' \
-  agent-memory-qdrant agent-memory-embedding
-mount | grep /mnt/agent-memory-store
-df -h /mnt/agent-memory-store /overlay
+python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py health
+python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py smoke
+python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py recall \
+  "agent-memory runtime facts storage vector hook"
 ```
 
-Expected steady state:
-
-- `embedding.provider=http`, `embedding.available=true`.
-- Qdrant `points_count` is nonzero.
-- `agent-memory-qdrant` and `agent-memory-embedding` are running with
-  `restart=unless-stopped`.
-- `/mnt/agent-memory-store` is mounted from `/dev/sda2` as ext4.
+Treat the recalled runtime topology as the source for any lower-level command
+you run next.
 
 ## Recall Test
 
-Use this to prove vector recall participates:
+Use the helper to check recall behavior without duplicating service topology in
+this file:
 
 ```sh
-/opt/agent-memory/venv/bin/python -c "import json,time,urllib.request; P={'prompt':'AB分区 升级失败 回滚 boot_a boot_b update_engine','limit_memories':5,'limit_docs':3}; d=json.dumps(P,ensure_ascii=False).encode(); r=urllib.request.Request('http://127.0.0.1:18088/recall',data=d,headers={'Content-Type':'application/json'}); t=time.perf_counter(); x=json.loads(urllib.request.urlopen(r,timeout=5).read().decode()); print(json.dumps({'ms':round((time.perf_counter()-t)*1000,2),'items':len(x.get('items',[])),'vector_scores':[round(float(i.get('vector_score') or 0),4) for i in x.get('items',[])]},ensure_ascii=False))"
+python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py recall \
+  "AB分区 升级失败 回滚 boot_a boot_b update_engine"
 ```
 
 If vector recall is active, doc items should have nonzero `vector_score`.
@@ -353,9 +334,8 @@ If vector recall is active, doc items should have nonzero `vector_score`.
 Always check for an existing equivalent memory before writing:
 
 ```sh
-curl -s http://127.0.0.1:18088/memory/search \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"OpenWrt agent-memory SSD storage layout","limit":10}'
+python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py recall \
+  "memory title or topic to check before writing"
 ```
 
 If a matching memory exists, include its `id` in `/memory/upsert` so the write
@@ -364,7 +344,6 @@ updates that memory instead of creating another one.
 Use the bundled script when available:
 
 ```sh
-python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py upsert-baseline
 python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py smoke
 python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py workflow-start --trunk-id current --goal "..."
 python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py workflow-update --trunk-id current --progress "..."
@@ -372,16 +351,16 @@ python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py workflow-ge
 python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py prompt-template implementer
 ```
 
-When running on OpenWrt, the script defaults to `http://127.0.0.1:18088`. From
-another host, set `AGENT_MEMORY_URL` only if the API is explicitly forwarded.
+When running from a host that does not use the default local API forwarding, set
+`AGENT_MEMORY_URL` from the runtime topology recalled from the database.
 
-Manual upsert payload shape:
+Manual memory upsert payload shape:
 
 ```json
 {
   "type": "system",
   "scope": "openwrt",
-  "title": "OpenWrt agent-memory SSD storage layout",
+  "title": "Short stable memory title",
   "content": "One short verified fact.",
   "tags": ["openwrt", "agent-memory", "ssd", "软路由"],
   "source": "codex-skill/openwrt-agent-memory",
@@ -393,22 +372,8 @@ Manual upsert payload shape:
 
 ## Common Fixes
 
-- Startup:
-  ```sh
-  /etc/init.d/fstab enable
-  /etc/init.d/dockerd enable
-  /etc/init.d/agent-memory enable
-  docker update --restart unless-stopped agent-memory-qdrant agent-memory-embedding
-  ```
-- Restart runtime:
-  ```sh
-  cd /opt/agent-memory
-  docker compose up -d --no-build qdrant embedding
-  /etc/init.d/agent-memory restart
-  ```
-- Warm embedding after restart:
-  ```sh
-  curl -s -X POST http://127.0.0.1:18089/embed \
-    -H 'Content-Type: application/json' \
-    -d '{"text":"AB partition boot_a boot_b update_engine"}' >/dev/null
-  ```
+- Before applying a common fix, recall the relevant runtime topology and
+  operational caveat memory.
+- Startup, restart, and embedding warmup commands are environment facts; keep
+  their concrete command lines in the memory database or runbook documents, not
+  duplicated in this skill file.
