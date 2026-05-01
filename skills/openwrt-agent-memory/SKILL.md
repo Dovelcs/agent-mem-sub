@@ -61,6 +61,12 @@ workflow rules only; retrieve facts through recall or `/memory/search`.
    deployment fact, update an existing memory or create a concise new one. Only
    update this skill when the agent's behavior or workflow rules must change.
    Put long evidence in docs/index instead of SKILL.md.
+13. For lookup tasks, an exact memory hit should become the working route. If
+   the hit includes enough repo/path/function/command context, continue from
+   it and at most do a targeted verification of the remembered path or command.
+   Do not re-run broad `rg`, `find`, or `git log` just to rediscover the same
+   fact. Re-scan only when the remembered context is incomplete, stale,
+   contradicted by targeted verification, or insufficient to continue.
 
 ## Unified Workflow Entry
 
@@ -338,6 +344,11 @@ path, platform, device, or environment so future recall can prefer the known
 answer over another SDK scan. The client should not spend extra round trips
 deciding create vs update; OpenWrt performs the same-topic check and returns
 `created`, `updated`, or `skipped`.
+
+When memory already returns an exact conclusion for a lookup, use it as the
+starting point. A targeted read of the remembered file or command is acceptable
+when current-state proof matters, but a new broad scan is only justified after
+the remembered route fails or lacks enough detail to proceed.
 
 ```sh
 python3 ~/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py write-found \
