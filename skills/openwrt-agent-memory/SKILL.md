@@ -12,7 +12,62 @@ metadata:
 The database is the only source for durable memory facts. Do not duplicate
 runtime topology, credentials, performance baselines, storage layout, or other
 recallable facts in this skill or helper scripts. This skill keeps behavior and
-workflow rules only; retrieve facts through recall or `/memory/search`.
+workflow rules only; retrieve facts through the local `memory-decision` gate
+and the compact candidate flow below.
+
+## Step-Level Memory Decision
+
+Before each meaningful task step, run a low-cost local score. This is a local
+regex decision only; it does not access the network or read memory content.
+
+```sh
+python3 /home/donovan/.codex/bin/agent_memory.py memory-decision "<step description>"
+```
+
+A meaningful step is an independent goal or route choice, not every shell
+command. Score at least these steps before acting: route selection, remote or
+device access, service checks, log/path lookup, use of scripts/tools, credential
+or login flow, broad `rg`/`find`/`git log`/`git grep`, config change,
+deployment, restart, destructive action, and the next step after an error.
+Skill-owned routine workflows, such as a generic code commit/push request, do
+not require memory lookup unless the step also includes environment-sensitive
+signals such as production/staging/customer/online, a named host, ssh route,
+credential/login, deployment, restart, container access, or a prior failure.
+
+Always include these in the score when present:
+
+- Nonstandard tools: custom CLI, MCP, factory tools, flashing tools, vendor
+  scripts, wrappers, internal APIs.
+- Nonstandard scripts: one-off scripts, deploy/fix/collection scripts, hooks,
+  bridges, proxies.
+- Credentials and login: JIRA/Gerrit/Sub2API admin, tokens, cookies, OAuth,
+  SSH keys, web login, API keys.
+- Access channels: `ssh-vps2`, `ssh-openwrt`, adb, serial, Tailscale,
+  `docker exec`, container-local health checks, host-vs-container choices.
+
+Thresholds:
+
+- `<3`: no memory lookup.
+- `>=3`: run compact candidates.
+- `>=5`: read 1-3 selected full memories before continuing.
+- `>=7`: memory read is mandatory before remote, access, credential, or
+  destructive steps.
+- `>=9`: make a small plan first, then continue through candidate recall.
+
+## Agent-Facing Candidate Recall
+
+When `memory-decision` reaches a lookup threshold, prefer the compact two-step
+CLI flow instead of `/recall` or raw `/memory/search` output:
+
+1. Run `python3 /home/donovan/.codex/bin/agent_memory.py search-candidates "<query>" --limit 15`.
+   This prints compact `id | type | score | title | summary` lines only.
+2. Select the relevant ids.
+3. Run `python3 /home/donovan/.codex/bin/agent_memory.py get-memory <id> [<id> ...]`
+   to bring only selected full memories into context.
+
+Do not print full `/memory/search` candidate JSON unless machine-readable
+metadata is explicitly needed; it wastes context and defeats candidate
+selection.
 
 ## Operating Rules
 
@@ -35,32 +90,28 @@ workflow rules only; retrieve facts through recall or `/memory/search`.
    `软路由`, `固态硬盘`, `召回`, `降级`.
 8. If embedding or Qdrant fails, do not block the task. `/recall` should fall
    back to SQLite FTS; verify this before reporting a hard failure.
-9. Automatic recall belongs at `UserPromptSubmit`, not before every shell/tool
-   action. Keep the hook timeout short and return empty `additionalContext` on
-   tunnel/API errors so Codex is never blocked by memory recall.
-10. During execution, run an on-demand memory search when the task hits a
-   route or environment blocker instead of repeatedly trying the same path.
-   Triggers include the same command/interface failing twice, errors such as
-   `timeout`, `permission denied`, `connection reset`, `MCP error`,
-   `No such file`, or `ModuleNotFoundError`, a path/device/repo mismatch, or a
-   clear decision point between docs, DTS, logs, runtime commands, or reference
-   code. Search with the current error text plus the user goal, cwd/repo, and
-   platform keywords; use only the top 3 concise `route_guard`, `pitfall`, or
-   `verified_route` memories to adjust the route.
+9. The hook is reminder-only. It should not inject full recalled memory content
+   or run network recall for Codex. It uses the same local `memory-decision`
+   score to decide whether to emit a reminder, then the agent chooses whether
+   to run compact candidates and selected `get-memory`.
+10. During execution, score each meaningful intermediate step, not just the
+   first prompt and not just failures. This prevents mid-route mistakes where
+   the remembered pitfall belongs to a substep such as a script, credential
+   source, container-local health check, or host-vs-container distinction.
 11. When a user request can be satisfied through mutually exclusive execution
-   routes, first run a route-selection recall before choosing one. Examples:
-   fastboot vs Rockchip `upgrade_tool`, OTA vs full `update.img`, adb vs serial,
-   host-side USB device vs board-side runtime, or local file edit vs remote
-   device operation. Search for the user goal plus all plausible route names,
-   current cwd/repo/platform, and observed connection state; prefer
-   `decision_policy`, `route_guard`, `verified_route`, and `pitfall` memories
-   over generic docs. Treat the selected route as provisional until the current
-   transport/environment is verified.
-12. At the end of each OpenWrt agent-memory task, do a short maintenance check:
-   if the task exposed a reusable operational pitfall, fixed sequence, or stable
-   deployment fact, update an existing memory or create a concise new one. Only
-   update this skill when the agent's behavior or workflow rules must change.
-   Put long evidence in docs/index instead of SKILL.md.
+   routes, run `memory-decision` on the route choice before choosing one.
+   Examples: fastboot vs Rockchip `upgrade_tool`, OTA vs full `update.img`, adb
+   vs serial, host-side USB device vs board-side runtime, local file edit vs
+   remote device operation, host health check vs container-local health check.
+   Prefer `decision_policy`, `route_guard`, `verified_route`, and `pitfall`
+   memories over generic docs. Treat the selected route as provisional until
+   the current transport/environment is verified.
+12. At the end of each OpenWrt agent-memory task, do a maintenance check for
+   reusable conclusions. Write or update memory for proven tool/script entries,
+   misleading access paths, effective credential locations or login flows,
+   required command/API parameters, reliable routes, and failed routes that are
+   likely to be retried. Do not store raw passwords, tokens, cookies, or API
+   keys; store only the credential location, access flow, and risk boundary.
 13. For lookup tasks, an exact memory hit should become the working route. If
    the hit includes enough repo/path/function/command context, continue from
    it and at most do a targeted verification of the remembered path or command.
@@ -73,6 +124,40 @@ workflow rules only; retrieve facts through recall or `/memory/search`.
    line. A memory such as "found in foo.c" is too weak; write "entry
    `foo_start()` is at `path/foo.c:123` and is reached from ...".
 
+## Difficulty Scoring
+
+`memory-decision` implements this local scoring model:
+
+- `+2` remote, device, production, or staging environment.
+- `+1` explicit production/staging/customer/online risk marker.
+- `+2` service, deployment, logs, disk, build entry, DTS, driver path, or
+  container health.
+- `+2` route choice.
+- `+2` nonstandard tool, script, wrapper, MCP, hook, bridge, proxy, or internal
+  API.
+- `+2` credential, password, login, token, cookie, OAuth, admin backend, API
+  key, JIRA, Gerrit, or Sub2API admin.
+- `+2` special access channel: ssh, adb, serial, Tailscale, `docker exec`,
+  container-local health, web login, or host-vs-container decision.
+- `+1` historical entity: `vps2`, `sub2api`, OpenWrt, a concrete SDK, board,
+  customer project, or known service name.
+- `+1` broad scan: `rg`, `find`, `git log`, `git grep`, or equivalent.
+- `+1` first failure.
+- `+2` second failure on the same path.
+- `+2` high-signal error: `timeout`, `permission denied`, `No such file`,
+  `MCP error`, `connection reset`, `ModuleNotFoundError`, `401/403`, or login
+  redirect anomaly.
+- `+3` destructive or service-impacting action: write config, deploy, restart,
+  delete, migrate, flash, upgrade, or reboot.
+
+If the selected memory returns an exact usable path, command, device route,
+credential source, login flow, script entry, or document source, continue from
+it with only targeted verification. If it is empty, stale, vague, or
+contradicted by current state, probe the repo/device/docs. Any probe that
+becomes a chosen route, patch location, reusable command, credential location,
+or tool access route is a MEMORY_WRITE_CANDIDATE and must be closed before the
+final response.
+
 ## Unified Workflow Entry
 
 Use this skill as the single local workflow, memory, and conversation-trunk
@@ -80,8 +165,8 @@ entrypoint. It now absorbs the useful operating rules from the archived
 `codex-orchestrator`, `docs-first`, and `subagent-driven-development` skills;
 do not activate those skills separately unless they are restored for rollback.
 
-- Small tasks: execute directly, optionally run a quick recall when route,
-  credential, repo, or environment history may matter.
+- Small tasks: execute directly; run `memory-decision` when route, credential,
+  repo, or environment history may matter, then follow the threshold result.
 - Medium tasks: create or activate a compact trunk with `workflow-start`, then
   update it at meaningful milestones with `workflow-update`.
 - Complex, customer-facing, or high-risk tasks: create a light plan in the
@@ -100,19 +185,31 @@ do not activate those skills separately unless they are restored for rollback.
 - Long tasks must keep the trunk current enough that a new or compacted session
   can recover the goal, current route, finished milestones, open blockers, and
   next action without rereading the whole conversation.
+- After successfully resolving a target that took a long detour, multiple route
+  pivots, repeated failures, or hard-won investigation to reach the conclusion,
+  fork/copy the current task context to a small summarizer model or lightweight
+  worker for experience distillation. This is a background sidecar step: the
+  main conversation must continue with verification, handoff, or the next user
+  action and must not be blocked or redirected by the summarizer. The
+  summarizer's only job is to turn the current-context evidence, route pivots,
+  small tool pitfalls, and verified candidates into compact structured memory
+  candidates; it must not discover new facts, edit repo files, decide the main
+  route, or write durable memory directly. The main agent reviews the distilled
+  JSON before any memory write.
 
 Memory recall and workflow execution are separate responsibilities:
 
-- Use recall for fast route correction: prior environment failures, blocked
-  commands, wrong device assumptions, credentials/source locations, route
-  guards, and verified shortcuts.
-- Do not use recall as a replacement for workflow mechanics. Long task
+- Use `memory-decision` plus candidate recall for fast route correction: prior
+  environment failures, blocked commands, wrong device assumptions,
+  credentials/source locations, route guards, and verified shortcuts.
+- Do not use memory lookup as a replacement for workflow mechanics. Long task
   planning, trunk updates, worker dispatch, status handling, spec review, code
-  review, and final handoff must follow the process below even when recall is
-  fast.
+  review, and final handoff must follow the process below even when memory
+  lookup is fast.
 - When a route fails twice or an environment assumption is uncertain, pause the
-  current route, run recall with the exact failure plus goal/cwd/repo/platform,
-  update the trunk with the route pivot, then continue with the workflow.
+  current route, score the next step with the exact failure plus
+  goal/cwd/repo/platform, read selected memories when the threshold requires
+  it, update the trunk with the route pivot, then continue with the workflow.
 
 ## Absorbed Skill Parity
 
@@ -127,7 +224,7 @@ Treat it as capability parity, not a loose summary.
   shortest live proof path. Keep execution lanes explicit: local shell,
   OpenWrt/MCP, background process, browser, or remote service.
 - Equivalent flow for former `codex-orchestrator flow`:
-  1. Run route-selection recall when prior facts may matter.
+  1. Run `memory-decision` for route selection when prior facts may matter.
   2. Start or activate a trunk.
   3. Choose direct, spec-lite, formal docs-first, or subagent execution mode.
   4. Execute with milestone updates.
@@ -238,17 +335,17 @@ memory narrow: one fact, one route, or one preference.
 | Type | Scope | Use For | Recall Behavior |
 | --- | --- | --- | --- |
 | `user_style` | `global` | Stable user preferences, output style, execution expectations, and disliked answer patterns. | Treat as broad behavior guidance; do not attach platform or chip tags unless the preference is domain-specific. |
-| `agent_route` | `codex`, `openwrt`, tool name | How Codex should operate a tool, service, MCP, hook, or local environment. | Recall at task start and on environment/tool blockers. |
-| `decision_policy` | workflow, platform, repo | Which route to choose when several valid methods exist, and what current-state checks decide between them. | Recall before choosing between mutually exclusive routes such as fastboot, RK tool, OTA, adb, serial, or host-side operations. |
-| `route_guard` | repo, platform, workflow | A route that should be tried first, plus routes that repeatedly wasted time. | Recall on task start and when the agent reaches a route decision. |
-| `pitfall` | tool, repo, platform | Reproducible errors, command caveats, bad assumptions, or failure signatures. | Recall on repeated failure or matching error text. |
+| `agent_route` | `codex`, `openwrt`, tool name | How Codex should operate a tool, service, MCP, hook, or local environment. | Score at task start and environment/tool blockers; read when threshold requires it. |
+| `decision_policy` | workflow, platform, repo | Which route to choose when several valid methods exist, and what current-state checks decide between them. | Score before choosing between mutually exclusive routes such as fastboot, RK tool, OTA, adb, serial, or host-side operations. |
+| `route_guard` | repo, platform, workflow | A route that should be tried first, plus routes that repeatedly wasted time. | Score at task start and when the agent reaches a route decision. |
+| `pitfall` | tool, repo, platform | Reproducible errors, command caveats, bad assumptions, or failure signatures. | Score on repeated failure or matching error text. |
 | `verified_route` | repo, platform, workflow | A proven shortest path, validation sequence, or known-good command flow. | Prefer over exploratory search when the same problem shape appears. |
 | `project_fact` | repo or product | Stable repository, branch, build, packaging, service, or customer-deliverable facts. | Recall only when cwd/repo/product/customer matches. |
 | `hardware_debug` | platform, board, peripheral | Board, DTS, pinctrl, driver, peripheral chip, runtime probe, and bring-up findings. | Recall for matching platform/peripheral; do not let it dominate non-hardware tasks. |
 | `doc_index` | docs set or repo | Where documents live, how they were deduped, source manifests, and which files answer which topics. | Recall when finding docs or explaining source provenance. |
 | `workflow_policy` | workflow or organization | Commit, JIRA, review, customer-document, sync, and delivery rules. | Recall for matching workflow even when no hardware keywords appear. |
 | `performance_baseline` | service, repo, device | Measured latency, memory/disk use, throughput, and startup behavior. | Treat as drift-prone unless just verified. |
-| `credential_location` | service or device | Where credentials or wrappers are configured, without exposing secrets in recall output. | Recall only enough to route to the credential source; never print raw secrets. |
+| `credential_location` | service or device | Where credentials or wrappers are configured, without exposing secrets in recall output. | Score credential/login steps; read only enough to route to the credential source and never print raw secrets. |
 
 Tagging rules:
 
@@ -289,8 +386,9 @@ not in local plan text.
   subtask branch result. Keep each progress or branch note one short sentence.
 - Use `trunk_get` after compaction/resume to recover the current goal and last
   progress before continuing.
-- Pass `trunk_id` into `/recall` when available; recall will inject only a
-  compact "Current trunk" section.
+- When a tool explicitly uses `/recall` with `trunk_id`, keep any returned
+  trunk context compact. Normal Codex routing still uses `memory-decision`
+  followed by compact candidates and selected `get-memory`.
 - Run `trunk_cleanup` periodically. By default, draft trunks that were never
   activated are deleted after 24 hours, inactive unfinished trunks are deleted
   after 168 hours, and `done`/`archived` trunks are retained. Adjust TTLs with

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -14,6 +15,7 @@ from typing import Any
 
 
 BASE_URL = os.environ.get("AGENT_MEMORY_URL", "http://100.106.225.53:18088").rstrip("/")
+CLI_ENTRY = "/home/donovan/.codex/bin/agent_memory.py"
 SKILL_DIR = Path(__file__).resolve().parents[1]
 PROMPT_DIR = SKILL_DIR / "references" / "prompts"
 
@@ -109,6 +111,277 @@ def compact(text: str, limit: int = 140) -> str:
     if len(value) <= limit:
         return value
     return value[: max(limit - 3, 0)].rstrip() + "..."
+
+
+def has_any(patterns: list[str], text: str) -> bool:
+    return any(re.search(pattern, text, re.I) for pattern in patterns)
+
+
+def is_skill_owned_code_submit(text: str) -> bool:
+    return has_any(
+        [
+            r"代码.{0,20}(提交|推送|push|commit).{0,20}(服务器|server|remote)",
+            r"(提交|推送).{0,20}代码.{0,20}(服务器|server|remote)",
+            r"\b(git push|push code|commit code)\b",
+        ],
+        text,
+    )
+
+
+def has_environment_sensitive_signal(text: str) -> bool:
+    return has_any(
+        [
+            r"vps\d+|sub2api|windsurfapi|openwrt|ssh-[a-z0-9_-]+",
+            r"prod|production|staging|customer",
+            r"\b(prod|production|staging|customer)\b",
+            r"\b[a-z0-9_-]*(prod|staging)[a-z0-9_-]*\b",
+            r"\b[a-z0-9_-]+\.[a-z0-9_.-]+\b",
+            r"\b(ssh|adb|serial|tailscale|docker|deploy|deployment|restart|reboot|token|cookie|oauth|password|credential)\b",
+            r"生产|准生产|客户|公网|线上|部署|重启|删除|迁移|刷机|容器|凭证|密码|登录|后台|令牌|密钥",
+        ],
+        text,
+    )
+
+
+DECISION_RULES: list[tuple[str, int, list[str], list[str]]] = [
+    (
+        "remote",
+        2,
+        [
+            r"\b(remote|server|vps|host|prod|production|staging|device|board|router|openwrt)\b",
+            r"vps\d*|ssh-[a-z0-9_-]+",
+            r"远端|服务器|设备|板卡|软路由|生产|准生产",
+        ],
+        ["remote", "device", "prod", "远端", "设备"],
+    ),
+    (
+        "environment-risk",
+        1,
+        [
+            r"prod|production|staging|customer",
+            r"生产|准生产|客户|公网|线上",
+        ],
+        ["production", "staging", "customer", "online", "生产", "客户", "线上"],
+    ),
+    (
+        "service-log-path",
+        2,
+        [
+            r"\b(service|deploy|deployment|log|logs|disk|build|dts|driver|container|compose|health)\b",
+            r"sub2api|windsurfapi|服务(?!器)|部署|日志|磁盘|硬盘|容量|构建入口|驱动|容器|健康检查",
+        ],
+        ["service", "deploy", "logs", "disk", "path", "服务", "部署", "日志", "磁盘", "路径"],
+    ),
+    (
+        "workflow-access",
+        2,
+        [
+            r"\b(jira|gerrit|admin)\b",
+            r"jira|gerrit|admin|工单|单子",
+        ],
+        ["workflow", "access", "login", "credential", "工单", "访问", "登录", "凭证"],
+    ),
+    (
+        "route-choice",
+        2,
+        [
+            r"\b(route|choose|choice|which|entrypoint|strategy|vs|or|instead|prefer)\b",
+            r"路线|路径选择|选择|入口|用哪个|还是|对比|优先",
+        ],
+        ["route", "entrypoint", "decision", "路线", "入口", "选择"],
+    ),
+    (
+        "nonstandard-tool",
+        2,
+        [
+            r"\b(mcp|wrapper|cli|hook|bridge|proxy|factory|flash|burn|upgrade_tool|rkdeveloptool)\b",
+            r"\b[a-zA-Z0-9_./-]+\.py\b",
+            r"[a-zA-Z0-9_./-]+\.py",
+            r"自定义|非常规|脚本|工具|厂测|烧录|桥接|代理|内部接口|内部 API",
+        ],
+        ["tool", "script", "wrapper", "hook", "bridge", "pitfall", "工具", "脚本", "坑位"],
+    ),
+    (
+        "credential-login",
+        2,
+        [
+            r"\b(credential|password|passwd|secret|token|cookie|oauth|login|jira|gerrit|admin|api key|apikey)\b",
+            r"jira|gerrit|admin|凭证|密码|口令|登录|登入|后台|管理后台|令牌|密钥|工单",
+        ],
+        ["credential", "login", "token", "cookie", "OAuth", "admin", "凭证", "登录", "访问方式"],
+    ),
+    (
+        "special-access",
+        2,
+        [
+            r"\b(ssh|adb|serial|tailscale|docker exec|container-local|container local|container health|health check|web login)\b",
+            r"ssh-|adb|serial|tailscale|docker exec|串口|容器内|网页登录|访问通道|健康检查",
+        ],
+        ["ssh", "adb", "serial", "Tailscale", "docker exec", "container", "health", "访问", "通道", "容器内"],
+    ),
+    (
+        "historical-entity",
+        1,
+        [
+            r"\b(vps2|sub2api|windsurfapi|openwrt|jira|gerrit|sdk|rk\d+|quectel|samart|rockchip)\b",
+            r"vps2|sub2api|windsurfapi|openwrt|jira|gerrit|rk\d+|quectel|samart|rockchip",
+            r"客户项目|板卡|服务名",
+        ],
+        ["known-entity", "history", "历史实体", "服务名"],
+    ),
+    (
+        "broad-scan",
+        1,
+        [r"\b(rg|find|git log|git grep|grep -R|ripgrep)\b", r"全局搜|大范围搜索|扫一下"],
+        ["rg", "find", "git log", "git grep", "lookup", "scan"],
+    ),
+    (
+        "first-failure",
+        1,
+        [r"\b(fail|failed|failure|error|exception|broken)\b", r"失败|报错|异常|不通|不对"],
+        ["failure", "error", "失败", "报错"],
+    ),
+    (
+        "repeated-failure",
+        2,
+        [r"\b(second|again|twice|repeated|same path)\b", r"第二次|又失败|反复|重复|同一路径"],
+        ["repeated failure", "same route", "反复失败", "同一路径"],
+    ),
+    (
+        "high-signal-error",
+        2,
+        [
+            r"\b(timeout|permission denied|no such file|mcp error|connection reset|modulenotfounderror|401|403|redirect)\b",
+            r"超时|权限拒绝|找不到文件|连接重置|登录跳转异常",
+        ],
+        ["timeout", "permission denied", "No such file", "MCP error", "401", "403", "高信号错误"],
+    ),
+    (
+        "destructive-impact",
+        3,
+        [
+            r"\b(write config|deploy|restart|delete|remove|migrate|migration|flash|reboot|upgrade)\b",
+            r"写配置|部署|重启|删除|迁移|刷机|升级",
+        ],
+        ["destructive", "deploy", "restart", "migration", "flash", "破坏性", "部署", "重启"],
+    ),
+]
+
+
+def memory_decision_payload(step: str) -> dict[str, Any]:
+    text = " ".join(str(step or "").split())
+    if is_skill_owned_code_submit(text) and not has_environment_sensitive_signal(text):
+        return {
+            "score": 0,
+            "action": "none",
+            "reason": "skill-owned-code-submit",
+            "query": compact(text, 280),
+        }
+
+    reasons: list[str] = []
+    query_terms: list[str] = [text]
+    score = 0
+    for reason, points, patterns, terms in DECISION_RULES:
+        if has_any(patterns, text):
+            score += points
+            reasons.append(reason)
+            query_terms.extend(terms)
+
+    if score >= 9:
+        action = "plan-first"
+    elif score >= 7:
+        action = "must-recall-before-action"
+    elif score >= 5:
+        action = "get-memory-required"
+    elif score >= 3:
+        action = "search-candidates"
+    else:
+        action = "none"
+
+    query = compact(" ".join(dedupe(query_terms)), 280)
+    return {
+        "score": score,
+        "action": action,
+        "reason": ",".join(reasons) if reasons else "low-risk",
+        "query": query,
+    }
+
+
+def memory_decision(args: argparse.Namespace) -> int:
+    payload = memory_decision_payload(args.step)
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(
+            f"score={payload['score']} action={payload['action']} "
+            f"reason={payload['reason']} query={json.dumps(payload['query'], ensure_ascii=False)}"
+        )
+    return 0
+
+
+def memory_candidate(item: dict[str, Any], summary_chars: int) -> dict[str, Any]:
+    score = item.get("rank_score", item.get("text_score", 0.0))
+    try:
+        score_value: float | None = round(float(score), 4)
+    except Exception:
+        score_value = None
+    return {
+        "id": item.get("id"),
+        "type": item.get("type"),
+        "title": item.get("title"),
+        "score": score_value,
+        "scope": item.get("scope"),
+        "source": item.get("source"),
+        "updated_at": item.get("updated_at"),
+        "summary": compact(str(item.get("content") or ""), summary_chars),
+    }
+
+
+def search_candidates(args: argparse.Namespace) -> int:
+    started = time.perf_counter()
+    result = request_json(
+        "POST",
+        "/memory/search",
+        {"query": args.query, "limit": args.limit, "cwd": args.cwd, "repo": args.repo, "branch": args.branch},
+        timeout=5.0,
+    )
+    items = result.get("items", [])
+    candidates = [memory_candidate(item, args.summary_chars) for item in items[: args.limit]]
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "ok": bool(result.get("ok", True)),
+                    "mode": "candidate_summary",
+                    "query": args.query,
+                    "count": len(candidates),
+                    "ms": round((time.perf_counter() - started) * 1000, 2),
+                    "candidates": candidates,
+                    "next": f"Select relevant ids, then run: python3 {CLI_ENTRY} get-memory <id> [<id> ...]",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+        print(f"memory candidates: {len(candidates)} | ms={elapsed_ms} | query={args.query}")
+        print("format: id | type | score | title | summary")
+        for item in candidates:
+            print(
+                f"{item.get('id')} | {item.get('type') or ''} | {item.get('score')} | "
+                f"{item.get('title') or ''} | {item.get('summary') or ''}"
+            )
+        print(f"next: python3 {CLI_ENTRY} get-memory <id> [<id> ...]")
+    return 0 if result.get("ok", True) else 1
+
+
+def get_memory(args: argparse.Namespace) -> int:
+    payload = {"ids": args.ids, "mark_used": not args.no_mark_used}
+    result = request_json("POST", "/memory/get", payload, timeout=5.0)
+    items = result.get("items", [])
+    print(json.dumps({"ok": bool(result.get("ok")), "count": len(items), "items": items}, ensure_ascii=False, indent=2))
+    return 0 if result.get("ok") else 1
 
 
 def as_list(value: Any) -> list[str]:
@@ -388,6 +661,29 @@ def main() -> int:
     recall_parser = sub.add_parser("recall")
     recall_parser.add_argument("prompt")
 
+    decision_parser = sub.add_parser(
+        "memory-decision",
+        help="Score one meaningful step locally before deciding whether to read compact memory candidates.",
+    )
+    decision_parser.add_argument("step")
+    decision_parser.add_argument("--json", action="store_true")
+
+    candidates_parser = sub.add_parser(
+        "search-candidates",
+        help="Print compact id/title/summary candidates only; use get-memory for selected full content.",
+    )
+    candidates_parser.add_argument("query")
+    candidates_parser.add_argument("--limit", type=int, default=15)
+    candidates_parser.add_argument("--summary-chars", type=int, default=120)
+    candidates_parser.add_argument("--json", action="store_true", help="Print full JSON candidate metadata instead of compact lines.")
+    candidates_parser.add_argument("--cwd", default="")
+    candidates_parser.add_argument("--repo", default="")
+    candidates_parser.add_argument("--branch", default="")
+
+    get_memory_parser = sub.add_parser("get-memory", help="Read full memory content for selected ids.")
+    get_memory_parser.add_argument("ids", nargs="+", type=int)
+    get_memory_parser.add_argument("--no-mark-used", action="store_true")
+
     write_fact_parser = sub.add_parser("write-fact")
     write_fact_parser.add_argument("fact")
     write_fact_parser.add_argument("--type", default="project_fact")
@@ -490,6 +786,12 @@ def main() -> int:
             return smoke()
         if args.cmd == "recall":
             return recall(args.prompt)
+        if args.cmd == "memory-decision":
+            return memory_decision(args)
+        if args.cmd == "search-candidates":
+            return search_candidates(args)
+        if args.cmd == "get-memory":
+            return get_memory(args)
         if args.cmd == "write-fact":
             return write_fact(args)
         if args.cmd == "write-found":
