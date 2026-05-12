@@ -56,6 +56,10 @@ HARDWARE_DOC_TOKENS = {
     "uart",
     "usb",
     "adb",
+    "audio",
+    "codec",
+    "sai",
+    "i2s",
     "mipi",
     "dsi",
     "csi",
@@ -71,9 +75,16 @@ HARDWARE_DOC_TOKENS = {
     "rkdeveloptool",
     "loader",
     "maskrom",
+    "image",
+    "firmware",
+    "artifact",
+    "download",
     "分区",
     "烧录",
     "升级",
+    "镜像",
+    "固件",
+    "下载",
     "驱动",
     "设备树",
     "文档",
@@ -273,22 +284,25 @@ def memory_applicable(item: dict[str, Any], request: dict[str, Any]) -> bool:
     reuse_scope = str(item.get("reuse_scope") or "")
     if scope in HOST_INDEX_SCOPES:
         return bool(prompt_tokens(request) & HOST_INDEX_TOKENS)
+    if memory_type == "user_style":
+        return True
+    if has_repo_context(item, request):
+        return True
+    if memory_type in {"doc_index", "performance_baseline", "system"}:
+        prompt = prompt_tokens(request)
+        return bool(prompt & WORKFLOW_PROMPT_TOKENS) or bool(strong_topic_overlap(item, request))
     if memory_type == "workflow_policy" and scope == "global":
         prompt = prompt_tokens(request)
         return bool(prompt & WORKFLOW_PROMPT_TOKENS) or bool(strong_topic_overlap(item, request))
     if memory_type in {"project_fact", "hardware_debug", "project"}:
-        if has_repo_context(item, request):
-            return True
         if has_platform_context(item, request):
             topics = topic_prompt_tokens(request)
             overlap = strong_topic_overlap(item, request)
             if reuse_scope == "same_family":
                 return len(overlap) >= 2
             return not topics or bool(overlap)
-        return False
+        return bool(strong_topic_overlap(item, request))
     if memory_type in ROUTE_MEMORY_TYPES:
-        if has_repo_context(item, request):
-            return True
         if has_platform_context(item, request):
             topics = topic_prompt_tokens(request)
             overlap = strong_topic_overlap(item, request)
@@ -298,22 +312,27 @@ def memory_applicable(item: dict[str, Any], request: dict[str, Any]) -> bool:
         if scope == "global":
             return bool(strong_topic_overlap(item, request))
         return bool(strong_topic_overlap(item, request))
-    return True
+    return bool(strong_topic_overlap(item, request))
 
 
 def doc_applicable(item: dict[str, Any], request: dict[str, Any]) -> bool:
     path_name = str(item.get("path") or "").rsplit("/", 1)[-1].lower()
     if path_name in DOC_INDEX_PATH_SUFFIXES and not (prompt_tokens(request) & DOC_INDEX_PROMPT_TOKENS):
         return False
-    if has_repo_context(item, request) or has_platform_context(item, request):
+    if has_repo_context(item, request):
         return True
     overlap = strong_prompt_overlap(item, request)
+    kind = str(item.get("source_kind") or "")
+    if has_platform_context(item, request):
+        topics = topic_prompt_tokens(request)
+        if kind in {"official_doc", "dts", "config", "repo_code"}:
+            return not topics or bool(overlap)
+        return bool(overlap) or not topics
     if not overlap:
         return False
     prompt = prompt_tokens(request)
     if prompt & HARDWARE_DOC_TOKENS:
         return True
-    kind = str(item.get("source_kind") or "")
     return kind not in {"official_doc", "dts", "config", "repo_code"}
 
 

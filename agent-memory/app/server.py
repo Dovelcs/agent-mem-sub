@@ -9,7 +9,9 @@ from pydantic import BaseModel, Field
 
 from db import (
     CONFIG,
+    get_memories_by_ids,
     init_db,
+    mark_memories_used,
     search_document_chunks,
     search_memories,
     sqlite_health,
@@ -50,6 +52,12 @@ class SearchRequest(BaseModel):
     cwd: str = ""
     repo: str = ""
     branch: str = ""
+
+
+class MemoryGetRequest(BaseModel):
+    id: int | None = None
+    ids: list[int] = Field(default_factory=list)
+    mark_used: bool = True
 
 
 class DocsIngestRequest(BaseModel):
@@ -221,6 +229,17 @@ def memory_upsert(req: MemoryUpsert) -> dict[str, Any]:
 @app.post("/memory/search")
 def memory_search(req: SearchRequest) -> dict[str, Any]:
     return {"ok": True, "items": search_memories(req.query, req.limit)}
+
+
+@app.post("/memory/get")
+def memory_get(req: MemoryGetRequest) -> dict[str, Any]:
+    ids = list(req.ids)
+    if req.id is not None:
+        ids.insert(0, int(req.id))
+    memories = get_memories_by_ids(ids)
+    if req.mark_used:
+        mark_memories_used([int(item["id"]) for item in memories if item.get("id")])
+    return {"ok": bool(memories), "items": memories, "memory": memories[0] if memories else None}
 
 
 @app.post("/memory/suggest")

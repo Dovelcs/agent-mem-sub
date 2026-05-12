@@ -2,7 +2,7 @@ database:
   path: /opt/agent-memory/agent.db
 
 server:
-  host: 127.0.0.1
+  host: 0.0.0.0
   port: 18088
   recall_timeout_seconds: 1.8
 
@@ -20,7 +20,7 @@ embedding:
   query_prefix: "query: "
   openai_model: text-embedding-3-small
   openai_api_key_env: OPENAI_API_KEY
-  allow_during_recall: true
+  allow_during_recall: false
   timeout_seconds: 0.8
 
 ingest:
