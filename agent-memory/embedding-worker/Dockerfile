@@ -12,7 +12,7 @@ RUN apt-get update \
 
 RUN pip install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cpu \
-      torch==2.5.1
+      torch==2.6.0
 
 RUN pip install --no-cache-dir \
       fastapi==0.115.6 \

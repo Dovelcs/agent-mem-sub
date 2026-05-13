@@ -20,7 +20,7 @@ def read_json(value: str | None, fallback: Any) -> Any:
         return fallback
 
 
-def rows_for_source(conn: sqlite3.Connection, source_type: str, limit: int, min_id: int = 0) -> list[dict[str, Any]]:
+def rows_for_source(conn: sqlite3.Connection, source_type: str, limit: int, min_id: int = 0, max_id: int = 0) -> list[dict[str, Any]]:
     conn.row_factory = sqlite3.Row
     limit_sql = "" if limit <= 0 else " LIMIT ?"
     args: tuple[Any, ...] = () if limit <= 0 else (limit,)
@@ -29,6 +29,9 @@ def rows_for_source(conn: sqlite3.Connection, source_type: str, limit: int, min_
         if min_id > 0:
             where += " AND id >= ?"
             args = (min_id,) + args
+        if max_id > 0:
+            where += " AND id <= ?"
+            args = args + (max_id,)
         rows = conn.execute(
             f"""
             SELECT id, title, content, tags, status, expires_at, updated_at
@@ -44,6 +47,10 @@ def rows_for_source(conn: sqlite3.Connection, source_type: str, limit: int, min_
         if min_id > 0:
             where = "WHERE document_chunks.id >= ?"
             args = (min_id,) + args
+        if max_id > 0:
+            where += " AND " if where else "WHERE "
+            where += "document_chunks.id <= ?"
+            args = args + (max_id,)
         rows = conn.execute(
             f"""
             SELECT document_chunks.id, document_chunks.document_id,
@@ -133,6 +140,8 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--min-id", type=int, default=0)
+    parser.add_argument("--max-id", type=int, default=0)
+    parser.add_argument("--sort-by-length", action="store_true")
     parser.add_argument("--device", default=None)
     parser.add_argument("--query-prefix", default="passage: ")
     args = parser.parse_args()
@@ -153,7 +162,9 @@ def main() -> int:
     vector_size = None
     with out_path.open("w", encoding="utf-8") as out:
         for source_type in sources:
-            items = rows_for_source(conn, source_type, args.limit, args.min_id)
+            items = rows_for_source(conn, source_type, args.limit, args.min_id, args.max_id)
+            if args.sort_by_length:
+                items.sort(key=lambda item: len(text_for_item(source_type, item, args.query_prefix)))
             for batch in batched(items, args.batch_size):
                 texts = [text_for_item(source_type, item, args.query_prefix) for item in batch]
                 vectors = model.encode(texts, batch_size=args.batch_size, normalize_embeddings=True, show_progress_bar=False)

@@ -9,15 +9,16 @@ server:
 qdrant:
   enabled: true
   url: http://127.0.0.1:6333
-  collection: agent_chunks
+  collection: agent_chunks_qwen3_4b
   timeout_seconds: 0.5
-  vector_size: 384
+  vector_size: 2560
 
 embedding:
-  provider: http
-  local_model: intfloat/multilingual-e5-small
+  provider: none
+  local_model: Qwen/Qwen3-Embedding-4B
   http_url: http://127.0.0.1:18089
-  query_prefix: "query: "
+  query_prefix: "Instruct: Given a user request to recall durable agent-memory facts and documentation, retrieve relevant memories and document chunks.\nQuery: "
+  document_prefix: ""
   openai_model: text-embedding-3-small
   openai_api_key_env: OPENAI_API_KEY
   allow_during_recall: false

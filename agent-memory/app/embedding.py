@@ -63,49 +63,54 @@ class Embedder:
                 return False
         return False
 
-    def embed(self, text: str) -> list[float] | None:
+    def embed(self, text: str, prefix: str | None = None) -> list[float] | None:
         text = (text or "").strip()
         if not text or not self.available():
             return None
         try:
             with time_limit(self.timeout):
                 if self.provider == "openai":
-                    return self._embed_openai(text)
+                    return self._embed_openai(text, prefix)
                 if self.provider == "http":
-                    return self._embed_http(text)
+                    return self._embed_http(text, prefix)
                 if self.provider == "local":
-                    return self._embed_local(text)
+                    return self._embed_local(text, prefix)
         except Exception:
             return None
         return None
 
-    def _embed_local(self, text: str) -> list[float] | None:
+    def _prefix(self, prefix: str | None) -> str:
+        if prefix is not None:
+            return prefix
+        return str(self.config.get("document_prefix", ""))
+
+    def _embed_local(self, text: str, prefix: str | None = None) -> list[float] | None:
         from sentence_transformers import SentenceTransformer
 
         if self._model is None:
             self._model = SentenceTransformer(self.config.get("local_model", "sentence-transformers/all-MiniLM-L6-v2"))
-        vector = self._model.encode([text], normalize_embeddings=True)[0]
+        vector = self._model.encode([f"{self._prefix(prefix)}{text}"], normalize_embeddings=True)[0]
         return [float(v) for v in vector]
 
-    def _embed_openai(self, text: str) -> list[float] | None:
+    def _embed_openai(self, text: str, prefix: str | None = None) -> list[float] | None:
         key = os.environ.get(self.config.get("openai_api_key_env", "OPENAI_API_KEY"))
         if not key:
             return None
         resp = requests.post(
             "https://api.openai.com/v1/embeddings",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": self.config.get("openai_model", "text-embedding-3-small"), "input": text},
+            json={"model": self.config.get("openai_model", "text-embedding-3-small"), "input": f"{self._prefix(prefix)}{text}"},
             timeout=self.timeout,
         )
         resp.raise_for_status()
         data = resp.json()
         return [float(v) for v in data["data"][0]["embedding"]]
 
-    def _embed_http(self, text: str) -> list[float] | None:
+    def _embed_http(self, text: str, prefix: str | None = None) -> list[float] | None:
         url = self.config.get("http_url", "http://127.0.0.1:18089").rstrip("/") + "/embed"
         resp = requests.post(
             url,
-            json={"text": text, "prefix": self.config.get("query_prefix", "query: ")},
+            json={"text": text, "prefix": self._prefix(prefix)},
             timeout=self.timeout,
         )
         resp.raise_for_status()

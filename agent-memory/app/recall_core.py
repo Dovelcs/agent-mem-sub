@@ -487,7 +487,7 @@ def vector_items(request: dict[str, Any]) -> list[dict[str, Any]]:
     if not bool(emb_cfg.get("allow_during_recall", False)):
         return []
     embedder = Embedder(emb_cfg)
-    vector = embedder.embed(str(request.get("prompt") or ""))
+    vector = embedder.embed(str(request.get("prompt") or ""), prefix=str(emb_cfg.get("query_prefix", "")))
     if not vector:
         return []
     qdrant = QdrantLite(CONFIG.get("qdrant", {}))

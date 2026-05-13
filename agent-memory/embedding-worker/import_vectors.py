@@ -20,6 +20,7 @@ def main() -> int:
     parser.add_argument("--url", default="http://127.0.0.1:6333")
     parser.add_argument("--collection", default="agent_chunks")
     parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--timeout", type=float, default=60.0)
     args = parser.parse_args()
 
     path = Path(args.input)
@@ -29,11 +30,11 @@ def main() -> int:
         return 2
 
     vector_size = len(points[0]["vector"])
-    client = QdrantClient(url=args.url, timeout=10)
+    client = QdrantClient(url=args.url, timeout=args.timeout)
     collections = {item.name for item in client.get_collections().collections}
     if args.collection not in collections:
         client.create_collection(args.collection, vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE))
-    for field in ("source_type", "project", "platform", "customer", "path", "tags"):
+    for field in ("source_type", "project", "platform", "customer", "path", "tags", "source_kind", "evidence_level"):
         try:
             client.create_payload_index(args.collection, field_name=field, field_schema="keyword")
         except Exception:
