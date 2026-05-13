@@ -14,15 +14,15 @@ qdrant:
   vector_size: 2560
 
 embedding:
-  provider: http
+  provider: none
   local_model: Qwen/Qwen3-Embedding-4B
   http_url: http://100.114.74.111:18089
   query_prefix: "Instruct: Given a user request to recall durable agent-memory facts and documentation, retrieve relevant memories and document chunks.\nQuery: "
   document_prefix: ""
   openai_model: text-embedding-3-small
   openai_api_key_env: OPENAI_API_KEY
-  allow_during_recall: true
-  timeout_seconds: 15.0
+  allow_during_recall: false
+  timeout_seconds: 0.8
 
 vector_cache:
   enabled: true
