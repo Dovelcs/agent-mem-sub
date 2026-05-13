@@ -201,7 +201,7 @@ def score_item(item: dict[str, Any], request: dict[str, Any]) -> float:
     recency = _parse_time(item.get("updated_at"))
     return (
         min(text_score, 8.0) * 0.45
-        + vector_score * 1.8
+        + vector_score * 6.5
         + hint_score(item, request) * 1.2
         + importance * 1.0
         + confidence * 0.5
