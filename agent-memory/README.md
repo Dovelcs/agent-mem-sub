@@ -98,7 +98,9 @@ curl -s http://100.106.225.53:18088/memory/write_fact \
 ```
 
 Responses include `action: created|updated|skipped`, `memory_id`, `vector:
-queued|updated|skipped`, and `ms`.
+queued|updated|skipped`, and `ms`. The default `vector=async` writes a small
+pending vector job into the file cache instead of running the embedding model in
+the request path.
 
 For agent-side use, prefer the bundled thin formatter. It records the
 conclusion plus cwd/repo/branch/path context without storing raw command output:
@@ -241,6 +243,64 @@ On the OpenWrt deployment Qdrant is intentionally bound to `127.0.0.1`, so a
 safer workflow is to generate `agent_vectors.jsonl` locally, copy it to
 `/opt/agent-memory/data/vectors/`, and import from the OpenWrt side.
 
+## Memory Vector Cache Pool
+
+New memory writes use SQLite as the source of truth first, then queue a small
+JSON job under `../tmep/agent-memory-vector-cache/pending` by default. This
+keeps the write path fast and avoids starting Qwen3 or PyTorch inside the API
+process.
+
+Check the queue:
+
+```sh
+curl -s http://127.0.0.1:18088/memory/vector_cache
+```
+
+Drain the queue with the local Docker embedding image at low resource usage:
+
+```sh
+AGENT_MEMORY_EMBED_MODEL=Qwen/Qwen3-Embedding-4B \
+AGENT_MEMORY_VECTOR_CACHE_BATCH_SIZE=1 \
+AGENT_MEMORY_VECTOR_CACHE_SLEEP_SECONDS=1.0 \
+  sh scripts/docker-drain-vector-cache.sh ./tmep/agent-memory-vector-cache http://127.0.0.1:6333
+```
+
+The drain worker processes one memory job at a time, sleeps between items, and
+upserts deterministic memory points into the configured Qdrant collection. Use
+an SSH tunnel or run it on the host that can reach Qdrant when OpenWrt keeps
+Qdrant bound to `127.0.0.1`.
+
+For the live OpenWrt deployment, use the wrapper that pulls pending jobs from
+OpenWrt, opens a Qdrant SSH tunnel, drains locally with Qwen3, and syncs
+done/failed state back:
+
+```sh
+AGENT_MEMORY_EMBED_MODEL=Qwen/Qwen3-Embedding-4B \
+AGENT_MEMORY_VECTOR_CACHE_BATCH_SIZE=1 \
+AGENT_MEMORY_VECTOR_CACHE_SLEEP_SECONDS=1.0 \
+  sh scripts/docker-drain-openwrt-vector-cache.sh
+```
+
+Install the local five-minute auto-drain timer:
+
+```sh
+sh scripts/install-vector-cache-timer.sh
+```
+
+The timer runs `scripts/auto-drain-openwrt-vector-cache.sh`. Each tick only
+checks `/memory/vector_cache`; it starts Docker/Qwen3 only when `pending > 0`.
+Use this as the immediate refresh interface:
+
+```sh
+sh scripts/refresh-openwrt-vector-cache.sh
+```
+
+Or trigger the same refresh through systemd:
+
+```sh
+systemctl --user start agent-memory-vector-cache-drain.service
+```
+
 MCP tools:
 
 - `health`, `stats`, `recall`
@@ -249,7 +309,8 @@ MCP tools:
 - `docs_ingest`, `docs_search`, `docs_list`, `doc_get`, `doc_delete`,
   `chunk_get`
 - `kv_upsert`, `kv_get`, `kv_list`, `kv_delete`
-- `backup`, `qdrant_status`, `qdrant_ensure_collection`
+- `backup`, `qdrant_status`, `qdrant_ensure_collection`,
+  `vector_cache_status`
 
 MCP resources:
 

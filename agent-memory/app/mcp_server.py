@@ -31,7 +31,8 @@ from qdrant_client import QdrantLite
 from recall_core import build_recall, select_bucketed_doc_chunks
 from rerank import rerank
 from trunk import cleanup_trunks, get_trunk, list_trunks, update_trunk, upsert_trunk
-from vector_sync import delete_document_vectors, delete_memory_vector, upsert_memory_vector
+from vector_cache import queue_memory_vector, vector_cache_status
+from vector_sync import delete_document_vectors, delete_memory_vector
 
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -142,11 +143,11 @@ def tool_memory_upsert(args: dict[str, Any]) -> dict[str, Any]:
     payload = dict(args)
     payload["tags"] = normalize_tags(payload.get("tags", []))
     memory = upsert_memory(payload)
-    try:
-        upsert_memory_vector(memory)
-    except Exception:
-        pass
-    return {"ok": True, "memory": memory}
+    queued = queue_memory_vector(memory, CONFIG.get("vector_cache", {}))
+    result = {"ok": True, "memory": memory, "vector": "queued" if queued.get("queued") else "skipped"}
+    if queued.get("path"):
+        result["vector_cache_path"] = queued.get("path")
+    return result
 
 
 def tool_memory_get(args: dict[str, Any]) -> dict[str, Any]:
@@ -328,6 +329,10 @@ def tool_qdrant_ensure(args: dict[str, Any]) -> dict[str, Any]:
     return qdrant.health()
 
 
+def tool_vector_cache_status(args: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, **vector_cache_status(CONFIG.get("vector_cache", {}))}
+
+
 def tool_trunk_upsert(args: dict[str, Any]) -> dict[str, Any]:
     return upsert_trunk(dict(args))
 
@@ -417,6 +422,7 @@ TOOLS: dict[str, dict[str, Any]] = {
     "backup": {"description": "Run the lightweight backup script.", "handler": tool_backup, "inputSchema": schema({})},
     "qdrant_status": {"description": "Check Qdrant readiness.", "handler": tool_qdrant_status, "inputSchema": schema({})},
     "qdrant_ensure_collection": {"description": "Ensure Qdrant collection and payload indexes exist.", "handler": tool_qdrant_ensure, "inputSchema": schema({"vector_size": {"type": "integer", "default": 384}})},
+    "vector_cache_status": {"description": "Check pending memory vector cache jobs.", "handler": tool_vector_cache_status, "inputSchema": schema({})},
     "trunk_upsert": {"description": "Create or replace a compact conversation trunk in the memory key-value store.", "handler": tool_trunk_upsert, "inputSchema": schema({
         "trunk_id": {"type": "string"},
         "conversation_id": {"type": "string"},

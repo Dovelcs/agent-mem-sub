@@ -25,6 +25,7 @@ from recall_core import build_recall as build_recall_payload
 from recall_core import select_bucketed_doc_chunks
 from rerank import rerank
 from trunk import cleanup_trunks, get_trunk, list_trunks, update_trunk, upsert_trunk
+from vector_cache import queue_memory_vector, vector_cache_status
 from vector_sync import upsert_memory_vector
 
 
@@ -195,8 +196,10 @@ def _queue_memory_vector(result: dict[str, Any], vector_mode: str, background_ta
         except Exception:
             result["vector"] = "skipped"
     elif vector_mode != "none":
-        background_tasks.add_task(upsert_memory_vector, memory)
-        result["vector"] = "queued"
+        queued = queue_memory_vector(memory, CONFIG.get("vector_cache", {}))
+        result["vector"] = "queued" if queued.get("queued") else "skipped"
+        if queued.get("path"):
+            result["vector_cache_path"] = queued.get("path")
     else:
         result["vector"] = "skipped"
 
@@ -219,11 +222,16 @@ def memory_upsert(req: MemoryUpsert) -> dict[str, Any]:
     data = _model_data(req)
     data["tags"] = _as_list(data.get("tags"))
     memory = upsert_memory(data)
-    try:
-        upsert_memory_vector(memory)
-    except Exception:
-        pass
-    return {"ok": True, "memory": memory}
+    queued = queue_memory_vector(memory, CONFIG.get("vector_cache", {}))
+    result = {"ok": True, "memory": memory, "vector": "queued" if queued.get("queued") else "skipped"}
+    if queued.get("path"):
+        result["vector_cache_path"] = queued.get("path")
+    return result
+
+
+@app.get("/memory/vector_cache")
+def memory_vector_cache() -> dict[str, Any]:
+    return {"ok": True, **vector_cache_status(CONFIG.get("vector_cache", {}))}
 
 
 @app.post("/memory/search")

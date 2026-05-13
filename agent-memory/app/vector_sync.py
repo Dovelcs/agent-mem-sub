@@ -12,17 +12,9 @@ def qdrant() -> QdrantLite:
     return QdrantLite(CONFIG.get("qdrant", {}))
 
 
-def upsert_memory_vector(memory: dict[str, Any]) -> None:
-    embedder = Embedder(CONFIG.get("embedding", {}))
-    if not embedder.available():
-        return
-    vector = embedder.embed(f"{memory.get('title','')}\n{memory.get('content','')}")
-    if not vector:
-        return
+def memory_vector_point(memory: dict[str, Any], vector: list[float]) -> dict[str, Any]:
     memory_item = {**memory, "source_type": "memory"}
-    client = qdrant()
-    client.ensure_collection(len(vector))
-    client.upsert([{
+    return {
         "id": 1000000000 + int(memory["id"]),
         "vector": vector,
         "payload": {
@@ -42,7 +34,19 @@ def upsert_memory_vector(memory: dict[str, Any]) -> None:
             "evidence_level": evidence_level(memory_item),
             "updated_at": memory.get("updated_at", ""),
         },
-    }])
+    }
+
+
+def upsert_memory_vector(memory: dict[str, Any]) -> None:
+    embedder = Embedder(CONFIG.get("embedding", {}))
+    if not embedder.available():
+        return
+    vector = embedder.embed(f"{memory.get('title','')}\n{memory.get('content','')}")
+    if not vector:
+        return
+    client = qdrant()
+    client.ensure_collection(len(vector))
+    client.upsert([memory_vector_point(memory, vector)])
 
 
 def delete_memory_vector(memory_id: int) -> None:

@@ -4,8 +4,8 @@ import re
 import time
 from typing import Any
 
-from db import search_memories, upsert_memory
-from vector_sync import upsert_memory_vector
+from db import CONFIG, search_memories, upsert_memory
+from vector_cache import queue_memory_vector
 
 
 TYPE_HINTS: list[tuple[str, tuple[str, ...]]] = [
@@ -201,10 +201,7 @@ def suggest_memory(payload: dict[str, Any]) -> dict[str, Any]:
                 suggestion["id"] = item.get("id")
                 break
         saved = upsert_memory(suggestion)
-        try:
-            upsert_memory_vector(saved)
-        except Exception:
-            pass
+        queue_memory_vector(saved, CONFIG.get("vector_cache", {}))
         result["memory"] = saved
     return result
 

@@ -24,6 +24,11 @@ embedding:
   allow_during_recall: false
   timeout_seconds: 0.8
 
+vector_cache:
+  enabled: true
+  path: ../tmep/agent-memory-vector-cache
+  max_attempts: 3
+
 ingest:
   docs_path: /opt/agent-memory/docs
   chunk_chars: 1200

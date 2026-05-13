@@ -2,6 +2,8 @@
 agent-memory/agent.db
 agent-memory/docs/
 agent-memory/data/
+agent-memory/tmep/
+tmep/
 agent-memory/qdrant_storage/
 agent-memory/wheels/
 
