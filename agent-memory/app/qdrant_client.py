@@ -9,7 +9,7 @@ class QdrantLite:
     def __init__(self, config: dict[str, Any]):
         self.enabled = bool(config.get("enabled", True))
         self.url = str(config.get("url", "http://127.0.0.1:6333")).rstrip("/")
-        self.collection = str(config.get("collection", "agent_chunks"))
+        self.collection = str(config.get("collection", "agent_chunks_qwen3_4b"))
         self.timeout = float(config.get("timeout_seconds", 0.5))
         self.vector_size = int(config.get("vector_size", 384))
 
