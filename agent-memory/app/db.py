@@ -177,6 +177,26 @@ def get_pinned_memories(limit: int = 5) -> list[dict[str, Any]]:
         return [row_to_dict(row) or {} for row in rows]
 
 
+def get_user_preferences(limit: int = 8) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM memories
+            WHERE status IN ('active','pinned')
+              AND (type = 'user_style' OR scope = 'user_preferences')
+              AND (expires_at IS NULL OR expires_at > datetime('now'))
+            ORDER BY
+              CASE WHEN status = 'pinned' THEN 0 ELSE 1 END,
+              importance DESC,
+              confidence DESC,
+              updated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [row_to_dict(row) or {} for row in rows]
+
+
 def search_memories(query: str, limit: int = 20) -> list[dict[str, Any]]:
     fts = make_fts_query(query)
     with connect() as conn:

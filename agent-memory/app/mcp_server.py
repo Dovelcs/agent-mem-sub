@@ -16,6 +16,7 @@ from db import (
     connect,
     from_json_text,
     get_pinned_memories,
+    get_user_preferences,
     init_db,
     row_to_dict,
     search_document_chunks,
@@ -194,6 +195,10 @@ def tool_memory_delete(args: dict[str, Any]) -> dict[str, Any]:
 
 def tool_pinned(args: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "items": get_pinned_memories(int(args.get("limit", 5)))}
+
+
+def tool_user_preferences(args: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, "items": get_user_preferences(int(args.get("limit", 8)))}
 
 
 def tool_docs_ingest(args: dict[str, Any]) -> dict[str, Any]:
@@ -403,6 +408,7 @@ TOOLS: dict[str, dict[str, Any]] = {
     "memory_archive": {"description": "Archive a memory by id.", "handler": tool_memory_archive, "inputSchema": schema({"id": {"type": "integer"}}, ["id"])},
     "memory_delete": {"description": "Permanently delete a memory by id.", "handler": tool_memory_delete, "inputSchema": schema({"id": {"type": "integer"}}, ["id"])},
     "pinned_memories": {"description": "List pinned/global high-importance memories.", "handler": tool_pinned, "inputSchema": schema({"limit": {"type": "integer", "default": 5}})},
+    "user_preferences": {"description": "List mandatory user preference memories from type=user_style or scope=user_preferences.", "handler": tool_user_preferences, "inputSchema": schema({"limit": {"type": "integer", "default": 8}})},
     "docs_ingest": {"description": "Incrementally ingest supported text documents from docs_path.", "handler": tool_docs_ingest, "inputSchema": schema({
         "docs_path": {"type": "string"},
         "project": {"type": "string"},

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from db import (
     CONFIG,
     get_memories_by_ids,
+    get_user_preferences,
     init_db,
     mark_memories_used,
     search_document_chunks,
@@ -248,6 +249,11 @@ def memory_get(req: MemoryGetRequest) -> dict[str, Any]:
     if req.mark_used:
         mark_memories_used([int(item["id"]) for item in memories if item.get("id")])
     return {"ok": bool(memories), "items": memories, "memory": memories[0] if memories else None}
+
+
+@app.get("/memory/user_preferences")
+def memory_user_preferences(limit: int = 8) -> dict[str, Any]:
+    return {"ok": True, "items": get_user_preferences(max(1, min(int(limit), 20)))}
 
 
 @app.post("/memory/suggest")

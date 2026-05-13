@@ -8,6 +8,7 @@ from db import (
     get_document_chunks_by_ids,
     get_memories_by_ids,
     get_pinned_memories,
+    get_user_preferences,
     mark_memories_used,
     search_document_chunks,
     search_memories,
@@ -671,8 +672,9 @@ def build_recall(payload: dict[str, Any]) -> dict[str, Any]:
     limit_docs = max(2, min(int(payload.get("limit_docs", 3)), 3))
     fts_limit = int(CONFIG.get("recall", {}).get("fts_limit", 20))
 
+    user_preferences = get_user_preferences(limit=5)
     memory_map: dict[int, dict[str, Any]] = {}
-    for item in get_pinned_memories(limit=max(limit_memories, 5)) + search_memories(expanded_prompt, fts_limit):
+    for item in user_preferences + get_pinned_memories(limit=max(limit_memories, 5)) + search_memories(expanded_prompt, fts_limit):
         merge_candidate(memory_map, item, int(item["id"]), "memory")
 
     doc_map: dict[int, dict[str, Any]] = {}
@@ -700,7 +702,16 @@ def build_recall(payload: dict[str, Any]) -> dict[str, Any]:
     ranked_memory_candidates = [
         item for item in rerank(list(memory_map.values()), request) if memory_applicable(item, request)
     ]
-    ranked_memories = select_typed_memories(ranked_memory_candidates, limit_memories)
+    mandatory_preference_ids = {int(item["id"]) for item in user_preferences if item.get("id")}
+    mandatory_preferences = [
+        memory_map[int(item["id"])]
+        for item in user_preferences
+        if item.get("id") and int(item["id"]) in memory_map
+    ]
+    ranked_memories = mandatory_preferences + select_typed_memories(
+        [item for item in ranked_memory_candidates if int(item.get("id") or 0) not in mandatory_preference_ids],
+        limit_memories,
+    )
     ranked_doc_candidates = [
         item for item in rerank(list(doc_map.values()), request) if doc_applicable(item, request)
     ]

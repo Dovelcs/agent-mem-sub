@@ -334,7 +334,7 @@ memory narrow: one fact, one route, or one preference.
 
 | Type | Scope | Use For | Recall Behavior |
 | --- | --- | --- | --- |
-| `user_style` | `global` | Stable user preferences, output style, execution expectations, and disliked answer patterns. | Treat as broad behavior guidance; do not attach platform or chip tags unless the preference is domain-specific. |
+| `user_style` | `global` or `user_preferences` | Stable user preferences, output style, execution expectations, and disliked answer patterns. | This is the user preference space. `type=user_style` or `scope=user_preferences` memories are mandatory recall items; keep them short, pinned when stable, and domain-neutral unless the preference is domain-specific. |
 | `agent_route` | `codex`, `openwrt`, tool name | How Codex should operate a tool, service, MCP, hook, or local environment. | Score at task start and environment/tool blockers; read when threshold requires it. |
 | `decision_policy` | workflow, platform, repo | Which route to choose when several valid methods exist, and what current-state checks decide between them. | Score before choosing between mutually exclusive routes such as fastboot, RK tool, OTA, adb, serial, or host-side operations. |
 | `route_guard` | repo, platform, workflow | A route that should be tried first, plus routes that repeatedly wasted time. | Score at task start and when the agent reaches a route decision. |
@@ -364,6 +364,10 @@ Tagging rules:
 - Recall output is intentionally segmented by memory type. Inspect route
   decisions, pitfalls, workflow/access, project facts, and docs separately
   before choosing a path.
+- User preferences are a dedicated mandatory-recall space. The hook may inject
+  only `type=user_style` or `scope=user_preferences` items automatically; all
+  other task-specific memories still require compact candidate selection before
+  use.
 - Short prompts are expanded with intent aliases before search. For example,
   "烧录" also searches for fastboot, `upgrade_tool`, `rkdeveloptool`, OTA,
   `update.img`, Loader, Maskrom, route selection, and transport checks.

@@ -7,6 +7,9 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +18,7 @@ DEFAULT_STATE_PATH = "~/.cache/agent-memory/recall-hook-state.json"
 DEFAULT_SESSION_ROOT = "~/.codex/sessions"
 DEFAULT_TAIL_BYTES = 256 * 1024
 DEFAULT_SESSION_SCAN_LIMIT = 16
+DEFAULT_USER_PREFERENCES_LIMIT = 5
 DEFAULT_MEMORY_DECISION_PATH = "/home/donovan/.codex/skills/openwrt-agent-memory/scripts/agent_memory.py"
 _MEMORY_DECISION_PAYLOAD: Any | None = None
 _MEMORY_DECISION_LOAD_ATTEMPTED = False
@@ -182,11 +186,62 @@ def enrich_prompt_for_recall(prompt: str) -> str:
     return prompt
 
 
+def recall_url_base(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url or "http://127.0.0.1:18088/recall")
+    path = parsed.path or ""
+    if path.endswith("/recall"):
+        path = path[: -len("/recall")]
+    base = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path.rstrip("/"), "", ""))
+    return base or "http://127.0.0.1:18088"
+
+
+def default_recall_url() -> str:
+    urls = os.environ.get("AGENT_MEMORY_URLS", "")
+    for candidate in urls.split(","):
+        candidate = candidate.strip()
+        if candidate:
+            return candidate if candidate.endswith("/recall") else candidate.rstrip("/") + "/recall"
+    url = os.environ.get("AGENT_MEMORY_URL", "http://127.0.0.1:18088/recall").strip()
+    return url if url.endswith("/recall") else url.rstrip("/") + "/recall"
+
+
+def fetch_user_preferences(url: str, timeout: float, limit: int) -> list[dict[str, Any]]:
+    endpoint = f"{recall_url_base(url)}/memory/user_preferences?{urllib.parse.urlencode({'limit': max(1, limit)})}"
+    try:
+        with urllib.request.urlopen(endpoint, timeout=max(0.1, timeout)) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+        return []
+    items = payload.get("items") if isinstance(payload, dict) else []
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def compact_line(text: str, limit: int = 260) -> str:
+    text = re.sub(r"\s+", " ", text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def user_preferences_context(preferences: list[dict[str, Any]]) -> str:
+    if not preferences:
+        return ""
+    lines = ["Mandatory user preferences:"]
+    for item in preferences:
+        title = str(item.get("title") or f"memory {item.get('id') or ''}").strip()
+        content = compact_line(str(item.get("content") or ""))
+        if content:
+            lines.append(f"- {title}: {content}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def memory_selection_reminder(prompt: str) -> str:
     enriched = enrich_prompt_for_recall(prompt)
     lines = [
         "Memory routing reminder:",
-        "- The hook did not inject recalled memory content.",
+        "- The hook injected only mandatory user preferences; task-specific memories still require explicit selection.",
         "- Before each meaningful step, score it locally: python3 /home/donovan/.codex/bin/agent_memory.py memory-decision \"<step>\"",
         "- Thresholds: <3 none; >=3 search compact candidates; >=5 read 1-3 selected memories; >=7 mandatory before remote/access/credential/destructive steps; >=9 make a small plan first.",
         "- Candidate flow: python3 /home/donovan/.codex/bin/agent_memory.py search-candidates \"<query>\" --limit 15",
@@ -368,10 +423,11 @@ def main() -> int:
     parser.add_argument("--repo", default="")
     parser.add_argument("--branch", default="")
     parser.add_argument("--trunk-id", default="")
-    parser.add_argument("--url", default="http://127.0.0.1:18088/recall")
+    parser.add_argument("--url", default=default_recall_url())
     parser.add_argument("--timeout", type=float, default=float(os.environ.get("AGENT_MEMORY_HOOK_TIMEOUT", "1.4")))
     parser.add_argument("--limit-memories", type=int, default=5)
     parser.add_argument("--limit-docs", type=int, default=3)
+    parser.add_argument("--limit-user-preferences", type=int, default=int(os.environ.get("AGENT_MEMORY_USER_PREFERENCES_LIMIT", str(DEFAULT_USER_PREFERENCES_LIMIT))))
     args = parser.parse_args()
 
     data, raw = parse_input()
@@ -385,11 +441,16 @@ def main() -> int:
     branch = str(data.get("branch") or args.branch or git_value(["git", "branch", "--show-current"], cwd))
     state_path = Path(os.environ.get("AGENT_MEMORY_RECALL_STATE", DEFAULT_STATE_PATH)).expanduser()
     mode = os.environ.get("AGENT_MEMORY_RECALL_MODE", "action_or_compact_or_explicit")
+    preferences = fetch_user_preferences(args.url, args.timeout, args.limit_user_preferences)
+    should_include_reminder = should_recall(prompt, data, cwd, mode, state_path)
 
-    if not should_recall(prompt, data, cwd, mode, state_path):
+    if not preferences and not should_include_reminder:
         return print_empty()
 
     output = empty_output()
-    output["hookSpecificOutput"]["additionalContext"] = memory_selection_reminder(prompt)
+    parts = [user_preferences_context(preferences)]
+    if should_include_reminder:
+        parts.append(memory_selection_reminder(prompt))
+    output["hookSpecificOutput"]["additionalContext"] = "\n\n".join(part for part in parts if part)
     print(json.dumps(output, ensure_ascii=False))
     return 0
