@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir \
       fastapi==0.115.6 \
       uvicorn==0.34.0 \
       sentence-transformers==3.3.1 \
+      sentencepiece==0.2.0 \
       qdrant-client==1.12.1
 
 WORKDIR /work

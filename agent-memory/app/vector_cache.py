@@ -7,6 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from vector_profiles import vector_cache_config, vector_cache_targets
+
 
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CACHE_PATH = "../tmep/agent-memory-vector-cache"
@@ -48,7 +50,7 @@ def queue_enabled(config: dict[str, Any] | None = None) -> bool:
     return bool(cfg.get("enabled", True))
 
 
-def queue_memory_vector(memory: dict[str, Any], config: dict[str, Any] | None = None) -> dict[str, Any]:
+def _queue_memory_vector_one(memory: dict[str, Any], config: dict[str, Any] | None = None, profile: str = "") -> dict[str, Any]:
     if not memory or not memory.get("id"):
         return {"ok": False, "queued": False, "error": "missing memory id"}
     if not queue_enabled(config):
@@ -64,6 +66,7 @@ def queue_memory_vector(memory: dict[str, Any], config: dict[str, Any] | None = 
         "source_type": "memory",
         "memory_id": memory_id,
         "memory": memory,
+        "profile": profile,
         "attempts": 0,
         "queued_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "updated_at": updated,
@@ -75,7 +78,33 @@ def queue_memory_vector(memory: dict[str, Any], config: dict[str, Any] | None = 
     return {"ok": True, "queued": True, "path": str(final_path)}
 
 
+def queue_memory_vector(memory: dict[str, Any], config: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = config or {}
+    if "profiles" not in cfg and "targets" not in cfg:
+        return _queue_memory_vector_one(memory, cfg)
+
+    results = []
+    for profile in vector_cache_targets({"vector_cache": cfg, "vector_profiles": {"default": "", "profiles": {}}}):
+        profile_cfg = vector_cache_config({"vector_cache": cfg}, profile)
+        results.append(_queue_memory_vector_one(memory, profile_cfg, profile=profile))
+
+    paths = [item.get("path") for item in results if item.get("path")]
+    queued = any(bool(item.get("queued")) for item in results)
+    return {"ok": all(bool(item.get("ok")) for item in results), "queued": queued, "paths": paths, "results": results, "path": paths[0] if paths else ""}
+
+
 def vector_cache_status(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = config or {}
+    if "profiles" in cfg or "targets" in cfg:
+        profile_status: dict[str, Any] = {}
+        totals = {"pending": 0, "processing": 0, "done": 0, "failed": 0}
+        for profile in vector_cache_targets({"vector_cache": cfg, "vector_profiles": {"default": "", "profiles": {}}}):
+            status = vector_cache_status(vector_cache_config({"vector_cache": cfg}, profile))
+            profile_status[profile] = status
+            for key in totals:
+                totals[key] += int(status.get(key) or 0)
+        return {"enabled": queue_enabled(cfg), **totals, "profiles": profile_status}
+
     dirs = ensure_queue_dirs(config)
     return {
         "enabled": queue_enabled(config),

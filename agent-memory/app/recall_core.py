@@ -17,6 +17,7 @@ from embedding import Embedder
 from qdrant_client import QdrantLite
 from intent import expand_prompt, expansion_trace
 from rerank import rerank
+from vector_profiles import default_profile, embedding_config, qdrant_config
 
 
 GENERIC_DOC_TOKENS = {
@@ -484,14 +485,15 @@ def memory_sections(items: list[dict[str, Any]]) -> str:
 
 
 def vector_items(request: dict[str, Any]) -> list[dict[str, Any]]:
-    emb_cfg = CONFIG.get("embedding", {})
+    profile = str(request.get("vector_profile") or default_profile(CONFIG))
+    emb_cfg = embedding_config(CONFIG, profile)
     if not bool(emb_cfg.get("allow_during_recall", False)):
         return []
     embedder = Embedder(emb_cfg)
     vector = embedder.embed(str(request.get("prompt") or ""), prefix=str(emb_cfg.get("query_prefix", "")))
     if not vector:
         return []
-    qdrant = QdrantLite(CONFIG.get("qdrant", {}))
+    qdrant = QdrantLite(qdrant_config(CONFIG, profile))
     results = qdrant.search(vector, limit=int(CONFIG.get("recall", {}).get("vector_limit", 20)))
     items = []
     for hit in results:
@@ -499,6 +501,7 @@ def vector_items(request: dict[str, Any]) -> list[dict[str, Any]]:
         payload["source_type"] = payload.get("source_type") or "vector"
         payload["id"] = payload.get("item_id")
         payload["vector_score"] = float(hit.get("score") or 0.0)
+        payload["vector_profile"] = profile
         items.append(payload)
     return items
 

@@ -4,9 +4,11 @@ set -eu
 ROOT="${AGENT_MEMORY_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
 REMOTE="${AGENT_MEMORY_OPENWRT:-root@100.106.225.53}"
 SSH_KEY="${AGENT_MEMORY_OPENWRT_KEY:-/home/donovan/.ssh/id_rsa_openwrt_agent_memory}"
-REMOTE_CACHE="${AGENT_MEMORY_REMOTE_VECTOR_CACHE:-/opt/agent-memory/tmep/agent-memory-vector-cache}"
-LOCAL_CACHE="${1:-$ROOT/tmep/openwrt-vector-cache}"
+PROFILE="${AGENT_MEMORY_VECTOR_PROFILE:-qwen3_4b}"
+REMOTE_CACHE="${AGENT_MEMORY_REMOTE_VECTOR_CACHE:-/opt/agent-memory/tmep/agent-memory-vector-cache/$PROFILE}"
+LOCAL_CACHE="${1:-$ROOT/tmep/openwrt-vector-cache/$PROFILE}"
 LOCAL_QDRANT_PORT="${AGENT_MEMORY_QDRANT_TUNNEL_PORT:-16333}"
+COLLECTION="${AGENT_MEMORY_QDRANT_COLLECTION:-agent_chunks_qwen3_4b}"
 
 ssh_base() {
   ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE" "$@"
@@ -25,6 +27,8 @@ trap 'kill "$tunnel_pid" 2>/dev/null || true' EXIT
 sleep 1
 
 AGENT_MEMORY_VECTOR_CACHE_LIMIT="${AGENT_MEMORY_VECTOR_CACHE_LIMIT:-0}" \
+AGENT_MEMORY_VECTOR_PROFILE="$PROFILE" \
+AGENT_MEMORY_QDRANT_COLLECTION="$COLLECTION" \
   sh "$ROOT/scripts/docker-drain-vector-cache.sh" "$LOCAL_CACHE" "http://127.0.0.1:$LOCAL_QDRANT_PORT"
 
 tar -C "$LOCAL_CACHE" -czf - done failed \

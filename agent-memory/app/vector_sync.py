@@ -6,10 +6,11 @@ from db import CONFIG
 from embedding import Embedder
 from qdrant_client import QdrantLite
 from rerank import evidence_level, source_kind
+from vector_profiles import default_profile, embedding_config, qdrant_config
 
 
-def qdrant() -> QdrantLite:
-    return QdrantLite(CONFIG.get("qdrant", {}))
+def qdrant(profile: str | None = None) -> QdrantLite:
+    return QdrantLite(qdrant_config(CONFIG, profile or default_profile(CONFIG)))
 
 
 def memory_vector_point(memory: dict[str, Any], vector: list[float]) -> dict[str, Any]:
@@ -37,14 +38,15 @@ def memory_vector_point(memory: dict[str, Any], vector: list[float]) -> dict[str
     }
 
 
-def upsert_memory_vector(memory: dict[str, Any]) -> None:
-    embedder = Embedder(CONFIG.get("embedding", {}))
+def upsert_memory_vector(memory: dict[str, Any], profile: str | None = None) -> None:
+    selected = profile or default_profile(CONFIG)
+    embedder = Embedder(embedding_config(CONFIG, selected))
     if not embedder.available():
         return
     vector = embedder.embed(f"{memory.get('title','')}\n{memory.get('content','')}")
     if not vector:
         return
-    client = qdrant()
+    client = qdrant(selected)
     client.ensure_collection(len(vector))
     client.upsert([memory_vector_point(memory, vector)])
 

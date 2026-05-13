@@ -33,6 +33,7 @@ from recall_core import build_recall, select_bucketed_doc_chunks
 from rerank import rerank
 from trunk import cleanup_trunks, get_trunk, list_trunks, update_trunk, upsert_trunk
 from vector_cache import queue_memory_vector, vector_cache_status
+from vector_profiles import default_profile, embedding_config, profile_names, qdrant_config
 from vector_sync import delete_document_vectors, delete_memory_vector
 
 
@@ -112,17 +113,29 @@ def recall_local(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_health(args: dict[str, Any]) -> dict[str, Any]:
-    embedder = Embedder(CONFIG.get("embedding", {}))
+    vector_profiles = {}
+    for profile in profile_names(CONFIG):
+        emb_cfg = embedding_config(CONFIG, profile)
+        embedder = Embedder(emb_cfg)
+        vector_profiles[profile] = {
+            "default": profile == default_profile(CONFIG),
+            "qdrant": QdrantLite(qdrant_config(CONFIG, profile)).health(),
+            "embedding": {"provider": embedder.provider, "available": embedder.available()},
+        }
+    default = vector_profiles.get(default_profile(CONFIG), {})
     return {
         "ok": True,
         "sqlite": sqlite_health(),
-        "qdrant": QdrantLite(CONFIG.get("qdrant", {})).health(),
-        "embedding": {"provider": embedder.provider, "available": embedder.available()},
+        "qdrant": default.get("qdrant", {}),
+        "embedding": default.get("embedding", {}),
+        "vector_profiles": vector_profiles,
     }
 
 
 def tool_stats(args: dict[str, Any]) -> dict[str, Any]:
-    embedder = Embedder(CONFIG.get("embedding", {}))
+    profile = default_profile(CONFIG)
+    emb_cfg = embedding_config(CONFIG, profile)
+    embedder = Embedder(emb_cfg)
     return {
         "database": str(DB_PATH),
         "counts": {
@@ -131,7 +144,7 @@ def tool_stats(args: dict[str, Any]) -> dict[str, Any]:
             "document_chunks": table_count("document_chunks"),
             "key_values": table_count("key_values"),
         },
-        "qdrant": QdrantLite(CONFIG.get("qdrant", {})).health(),
+        "qdrant": QdrantLite(qdrant_config(CONFIG, profile)).health(),
         "embedding": {"provider": embedder.provider, "available": embedder.available()},
     }
 
@@ -148,6 +161,8 @@ def tool_memory_upsert(args: dict[str, Any]) -> dict[str, Any]:
     result = {"ok": True, "memory": memory, "vector": "queued" if queued.get("queued") else "skipped"}
     if queued.get("path"):
         result["vector_cache_path"] = queued.get("path")
+    if queued.get("paths"):
+        result["vector_cache_paths"] = queued.get("paths")
     return result
 
 
@@ -325,12 +340,15 @@ def tool_backup(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_qdrant_status(args: dict[str, Any]) -> dict[str, Any]:
-    return QdrantLite(CONFIG.get("qdrant", {})).health()
+    profile = str(args.get("profile") or default_profile(CONFIG))
+    return QdrantLite(qdrant_config(CONFIG, profile)).health()
 
 
 def tool_qdrant_ensure(args: dict[str, Any]) -> dict[str, Any]:
-    qdrant = QdrantLite(CONFIG.get("qdrant", {}))
-    qdrant.ensure_collection(int(args.get("vector_size") or CONFIG.get("qdrant", {}).get("vector_size", 384)))
+    profile = str(args.get("profile") or default_profile(CONFIG))
+    qdrant_cfg = qdrant_config(CONFIG, profile)
+    qdrant = QdrantLite(qdrant_cfg)
+    qdrant.ensure_collection(int(args.get("vector_size") or qdrant_cfg.get("vector_size", 384)))
     return qdrant.health()
 
 
@@ -426,8 +444,8 @@ TOOLS: dict[str, dict[str, Any]] = {
     "kv_list": {"description": "List namespaced key-value items.", "handler": tool_kv_list, "inputSchema": schema({"namespace": {"type": "string"}, "limit": {"type": "integer", "default": 50}})},
     "kv_delete": {"description": "Delete a namespaced key-value item.", "handler": tool_kv_delete, "inputSchema": schema({"namespace": {"type": "string"}, "key": {"type": "string"}}, ["key"])},
     "backup": {"description": "Run the lightweight backup script.", "handler": tool_backup, "inputSchema": schema({})},
-    "qdrant_status": {"description": "Check Qdrant readiness.", "handler": tool_qdrant_status, "inputSchema": schema({})},
-    "qdrant_ensure_collection": {"description": "Ensure Qdrant collection and payload indexes exist.", "handler": tool_qdrant_ensure, "inputSchema": schema({"vector_size": {"type": "integer", "default": 384}})},
+    "qdrant_status": {"description": "Check Qdrant readiness.", "handler": tool_qdrant_status, "inputSchema": schema({"profile": {"type": "string", "default": ""}})},
+    "qdrant_ensure_collection": {"description": "Ensure Qdrant collection and payload indexes exist.", "handler": tool_qdrant_ensure, "inputSchema": schema({"profile": {"type": "string", "default": ""}, "vector_size": {"type": "integer", "default": 384}})},
     "vector_cache_status": {"description": "Check pending memory vector cache jobs.", "handler": tool_vector_cache_status, "inputSchema": schema({})},
     "trunk_upsert": {"description": "Create or replace a compact conversation trunk in the memory key-value store.", "handler": tool_trunk_upsert, "inputSchema": schema({
         "trunk_id": {"type": "string"},

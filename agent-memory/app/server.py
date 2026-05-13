@@ -27,6 +27,7 @@ from recall_core import select_bucketed_doc_chunks
 from rerank import rerank
 from trunk import cleanup_trunks, get_trunk, list_trunks, update_trunk, upsert_trunk
 from vector_cache import queue_memory_vector, vector_cache_status
+from vector_profiles import default_profile, embedding_config, profile_names, qdrant_config
 from vector_sync import upsert_memory_vector
 
 
@@ -201,6 +202,8 @@ def _queue_memory_vector(result: dict[str, Any], vector_mode: str, background_ta
         result["vector"] = "queued" if queued.get("queued") else "skipped"
         if queued.get("path"):
             result["vector_cache_path"] = queued.get("path")
+        if queued.get("paths"):
+            result["vector_cache_paths"] = queued.get("paths")
     else:
         result["vector"] = "skipped"
 
@@ -208,14 +211,29 @@ def _queue_memory_vector(result: dict[str, Any], vector_mode: str, background_ta
 @app.on_event("startup")
 def startup() -> None:
     init_db()
-    QdrantLite(CONFIG.get("qdrant", {})).ensure_collection()
+    for profile in profile_names(CONFIG):
+        QdrantLite(qdrant_config(CONFIG, profile)).ensure_collection()
 
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    qdrant = QdrantLite(CONFIG.get("qdrant", {})).health()
-    embedder = Embedder(CONFIG.get("embedding", {}))
-    return {"ok": True, "sqlite": sqlite_health(), "qdrant": qdrant, "embedding": {"provider": embedder.provider, "available": embedder.available()}}
+    vector_profiles = {}
+    for profile in profile_names(CONFIG):
+        emb_cfg = embedding_config(CONFIG, profile)
+        embedder = Embedder(emb_cfg)
+        vector_profiles[profile] = {
+            "default": profile == default_profile(CONFIG),
+            "qdrant": QdrantLite(qdrant_config(CONFIG, profile)).health(),
+            "embedding": {"provider": embedder.provider, "available": embedder.available()},
+        }
+    default = vector_profiles.get(default_profile(CONFIG), {})
+    return {
+        "ok": True,
+        "sqlite": sqlite_health(),
+        "qdrant": default.get("qdrant", {}),
+        "embedding": default.get("embedding", {}),
+        "vector_profiles": vector_profiles,
+    }
 
 
 @app.post("/memory/upsert")
@@ -227,6 +245,8 @@ def memory_upsert(req: MemoryUpsert) -> dict[str, Any]:
     result = {"ok": True, "memory": memory, "vector": "queued" if queued.get("queued") else "skipped"}
     if queued.get("path"):
         result["vector_cache_path"] = queued.get("path")
+    if queued.get("paths"):
+        result["vector_cache_paths"] = queued.get("paths")
     return result
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import argparse
 from pathlib import Path
 
 ROOT = Path(os.environ.get("AGENT_MEMORY_ROOT", "/opt/agent-memory"))
@@ -13,6 +14,7 @@ from db import CONFIG, connect, from_json_text, init_db  # noqa: E402
 from embedding import Embedder  # noqa: E402
 from qdrant_client import QdrantLite  # noqa: E402
 from rerank import evidence_level, source_kind  # noqa: E402
+from vector_profiles import default_profile, embedding_config, qdrant_config  # noqa: E402
 
 
 def batched(items: list[dict], size: int = 64):
@@ -21,8 +23,15 @@ def batched(items: list[dict], size: int = 64):
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Rebuild Qdrant vectors from the live SQLite database.")
+    parser.add_argument("--profile", default="")
+    parser.add_argument("--collection", default="")
+    parser.add_argument("--qdrant-url", default="")
+    args = parser.parse_args()
+
     init_db()
-    embedder = Embedder(CONFIG.get("embedding", {}))
+    profile = args.profile or default_profile(CONFIG)
+    embedder = Embedder(embedding_config(CONFIG, profile))
     if not embedder.available():
         print(json.dumps({"ok": False, "error": "embedding unavailable", "provider": embedder.provider}, ensure_ascii=False))
         return
@@ -92,7 +101,12 @@ def main() -> None:
             },
         })
 
-    qdrant = QdrantLite(CONFIG.get("qdrant", {}))
+    qdrant_cfg = qdrant_config(CONFIG, profile)
+    if args.collection:
+        qdrant_cfg["collection"] = args.collection
+    if args.qdrant_url:
+        qdrant_cfg["url"] = args.qdrant_url
+    qdrant = QdrantLite(qdrant_cfg)
     if vector_size:
         qdrant.ensure_collection(vector_size)
     for batch in batched(points):

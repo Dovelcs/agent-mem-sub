@@ -44,14 +44,19 @@ def claim_pending(dirs: dict[str, Path]) -> Path | None:
 
 
 def embedding_config(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
-    cfg = dict(config.get("embedding", {}))
+    from vector_profiles import default_profile, embedding_config as profile_embedding_config
+
+    cfg = profile_embedding_config(config, args.profile or default_profile(config))
     provider = args.provider or os.environ.get("AGENT_MEMORY_VECTOR_CACHE_PROVIDER")
     model = args.model or os.environ.get("AGENT_MEMORY_VECTOR_CACHE_MODEL")
+    http_url = args.http_url or os.environ.get("AGENT_MEMORY_VECTOR_CACHE_HTTP_URL")
     timeout = args.timeout_seconds
     if provider:
         cfg["provider"] = provider
     if model:
         cfg["local_model"] = model
+    if http_url:
+        cfg["http_url"] = http_url
     if timeout is not None:
         cfg["timeout_seconds"] = timeout
     return cfg
@@ -90,8 +95,10 @@ def main() -> int:
     parser.add_argument("--cache-dir", default="")
     parser.add_argument("--provider", default="")
     parser.add_argument("--model", default="")
+    parser.add_argument("--http-url", default="")
     parser.add_argument("--qdrant-url", default="")
     parser.add_argument("--collection", default="")
+    parser.add_argument("--profile", default="")
     parser.add_argument("--timeout-seconds", type=float, default=None)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=1)
@@ -104,8 +111,10 @@ def main() -> int:
     from embedding import Embedder
     from qdrant_client import QdrantLite
     from vector_cache import ensure_queue_dirs, queue_dirs
+    from vector_profiles import default_profile, qdrant_config, vector_cache_config
 
-    cache_cfg = dict(CONFIG.get("vector_cache", {}))
+    profile = args.profile or default_profile(CONFIG)
+    cache_cfg = vector_cache_config(CONFIG, profile)
     if args.cache_dir:
         cache_cfg["path"] = args.cache_dir
     dirs = ensure_queue_dirs(cache_cfg)
@@ -115,7 +124,7 @@ def main() -> int:
         print(json.dumps({"ok": False, "error": "embedding unavailable", "provider": embedder.provider}, ensure_ascii=False))
         return 2
 
-    qdrant_cfg = dict(CONFIG.get("qdrant", {}))
+    qdrant_cfg = qdrant_config(CONFIG, profile)
     if args.qdrant_url:
         qdrant_cfg["url"] = args.qdrant_url
     if args.collection:

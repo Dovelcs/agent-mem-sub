@@ -25,3 +25,56 @@ services:
       - "127.0.0.1:18089:18089"
     volumes:
       - ./data/model-cache:/models
+  bge-m3:
+    build:
+      context: ./embedding-worker
+    image: agent-memory-embedder:local
+    container_name: agent-memory-bge-m3
+    restart: unless-stopped
+    entrypoint: ["python", "/work/server.py"]
+    environment:
+      EMBED_MODEL: /models/bge-m3
+      EMBED_QUERY_PREFIX: ""
+      HF_HOME: /models/huggingface
+      TRANSFORMERS_CACHE: /models/huggingface
+      SENTENCE_TRANSFORMERS_HOME: /models/sentence-transformers
+      PORT: "18090"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+      OPENBLAS_NUM_THREADS: "4"
+    ports:
+      - "127.0.0.1:18090:18090"
+    volumes:
+      - ./data/model-cache:/models
+  bge-m3-drain:
+    image: agent-memory-embedder:local
+    container_name: agent-memory-bge-m3-drain
+    restart: unless-stopped
+    network_mode: host
+    entrypoint: ["python", "/agent-memory/scripts/drain_vector_cache.py"]
+    environment:
+      PYTHONPATH: /agent-memory/app
+    command:
+      - --cache-dir
+      - /cache
+      - --provider
+      - http
+      - --http-url
+      - http://127.0.0.1:18090
+      - --qdrant-url
+      - http://127.0.0.1:6333
+      - --collection
+      - agent_chunks_bge_m3
+      - --profile
+      - bge_m3
+      - --sleep-seconds
+      - "10"
+      - --batch-size
+      - "1"
+      - --watch
+    volumes:
+      - .:/agent-memory
+      - ./tmep/agent-memory-vector-cache/bge_m3:/cache
+    depends_on:
+      - bge-m3
+      - qdrant

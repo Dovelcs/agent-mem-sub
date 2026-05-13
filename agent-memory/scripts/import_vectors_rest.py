@@ -18,7 +18,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Import JSONL vectors through the lightweight REST Qdrant client.")
     parser.add_argument("input", nargs="?", default="/opt/agent-memory/data/vectors/agent_vectors.jsonl")
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--collection", default="agent_chunks_qwen3_4b")
+    parser.add_argument("--collection", default="agent_chunks_bge_m3")
     parser.add_argument("--url", default="http://127.0.0.1:6333")
     args = parser.parse_args()
 
