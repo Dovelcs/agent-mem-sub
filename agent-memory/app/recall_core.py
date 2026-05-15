@@ -16,7 +16,7 @@ from db import (
 from embedding import Embedder
 from qdrant_client import QdrantLite
 from intent import expand_prompt, expansion_trace
-from rerank import rerank
+from rerank import neural_rerank, rerank
 from vector_profiles import default_profile, embedding_config, qdrant_config
 
 
@@ -172,6 +172,14 @@ GENERIC_ROUTE_TOKENS = GENERIC_DOC_TOKENS | {
     "路径",
     "项目",
 }
+EXACT_RECALL_RE = re.compile(
+    r"(/[A-Za-z0-9._~:@%+-]+(?:/[A-Za-z0-9._~:@%+-]+)+|"
+    r"\b[A-Z][A-Z0-9_]{2,}\b|"
+    r"\b[a-z0-9_./+-]+\.(?:c|cc|cpp|h|hpp|mk|dts|dtsi|yaml|yml|json|txt|md|py|sh)\b|"
+    r"\b(?:[Rr][Kk]|[Rr][Vv])\d{4}[A-Za-z]?\b|"
+    r"\b\d+(?:\.\d+){1,}\b|"
+    r"[\u4e00-\u9fff]{2,})"
+)
 
 
 def tokens(value: str) -> set[str]:
@@ -268,22 +276,57 @@ def topic_prompt_tokens(request: dict[str, Any]) -> set[str]:
     return useful
 
 
+def recall_plan(request: dict[str, Any]) -> dict[str, Any]:
+    prompt = str(request.get("original_prompt") or request.get("prompt") or "")
+    prompt_set = prompt_tokens(request)
+    topic_set = topic_prompt_tokens(request)
+    exact_matches = [match.group(0).lower() for match in EXACT_RECALL_RE.finditer(prompt)]
+    workflow_hit = bool(prompt_set & WORKFLOW_PROMPT_TOKENS)
+    hardware_hit = bool(prompt_set & HARDWARE_DOC_TOKENS) or bool(
+        re.search(r"(?<![a-z0-9])(rk|rv)\d{4}[a-z]?(?![a-z0-9])", prompt.lower())
+    )
+    has_meaning = bool(topic_set or exact_matches or workflow_hit or hardware_hit)
+    use_vector = has_meaning and bool(str(prompt).strip())
+    use_fts = bool(exact_matches or workflow_hit or hardware_hit or len(topic_set) >= 2)
+    return {
+        "has_meaning": has_meaning,
+        "use_vector": use_vector,
+        "use_fts": use_fts,
+        "include_memories": has_meaning or workflow_hit,
+        "include_docs": has_meaning and not workflow_hit,
+        "exact_terms": sorted(set(exact_matches))[:12],
+        "topic_terms": sorted(topic_set)[:12],
+    }
+
+
 def strong_topic_overlap(item: dict[str, Any], request: dict[str, Any]) -> set[str]:
     return topic_prompt_tokens(request) & tokens(item_blob(item))
+
+
+def infer_platform_token(request: dict[str, Any]) -> str:
+    text = " ".join(
+        str(request.get(k) or "") for k in ("original_prompt", "prompt", "cwd", "repo", "branch")
+    ).lower()
+    match = re.search(r"(?<![a-z0-9])(rk\d{4}[a-z]?|rv\d{4}[a-z]?|qsm\d+|qsc\d+|sg\d+|sh\d+)(?![a-z0-9])", text)
+    return match.group(1) if match else ""
 
 
 def has_platform_context(item: dict[str, Any], request: dict[str, Any]) -> bool:
     scope = str(item.get("reuse_scope") or "")
     if scope in {"same_platform", "same_family"}:
         return True
-    request_platforms = re.findall(r"(?<![a-z0-9])(rk\d{4}[a-z]?|rv\d{4}[a-z]?|qsm\d+|qsc\d+|sg\d+|sh\d+)(?![a-z0-9])", " ".join(str(request.get(k) or "") for k in ("original_prompt", "prompt", "cwd", "repo", "branch")).lower())
-    return bool(request_platforms and request_platforms[0] in item_blob(item).lower())
+    platform = infer_platform_token(request)
+    return bool(platform and platform in item_blob(item).lower())
 
 
 def memory_applicable(item: dict[str, Any], request: dict[str, Any]) -> bool:
     memory_type = str(item.get("type") or "")
     scope = str(item.get("scope") or "").lower()
     reuse_scope = str(item.get("reuse_scope") or "")
+    if not bool(request.get("include_user_preferences")) and (
+        memory_type == "user_style" or scope == "user_preferences"
+    ):
+        return False
     if scope in HOST_INDEX_SCOPES:
         return bool(prompt_tokens(request) & HOST_INDEX_TOKENS)
     if memory_type == "user_style":
@@ -327,9 +370,10 @@ def doc_applicable(item: dict[str, Any], request: dict[str, Any]) -> bool:
     kind = str(item.get("source_kind") or "")
     if has_platform_context(item, request):
         topics = topic_prompt_tokens(request)
+        topic_overlap = strong_topic_overlap(item, request)
         if kind in {"official_doc", "dts", "config", "repo_code"}:
-            return not topics or bool(overlap)
-        return bool(overlap) or not topics
+            return not topics or bool(topic_overlap)
+        return bool(topic_overlap) or not topics
     if not overlap:
         return False
     prompt = prompt_tokens(request)
@@ -345,6 +389,134 @@ def snippet(text: str, limit: int) -> str:
     return text[: max(limit - 3, 0)].rstrip() + "..."
 
 
+def evidence_snippet(item: dict[str, Any], request: dict[str, Any], limit: int = 360) -> str:
+    text = re.sub(r"\s+", " ", str(item.get("content") or "")).strip()
+    if not text:
+        return ""
+    terms = [term for term in prompt_tokens(request) | topic_prompt_tokens(request) if len(term) >= 2]
+    lowered = text.lower()
+    hit = -1
+    for term in sorted(terms, key=len, reverse=True):
+        hit = lowered.find(term.lower())
+        if hit >= 0:
+            break
+    if hit < 0:
+        return snippet(text, limit)
+    start = max(0, hit - limit // 3)
+    end = min(len(text), start + limit)
+    start = max(0, min(start, max(0, len(text) - limit)))
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(text) else ""
+    return prefix + text[start:end].strip() + suffix
+
+
+def candidate_title(item: dict[str, Any]) -> str:
+    return str(item.get("title") or item.get("heading") or item.get("path") or f"item {item.get('id')}")
+
+
+def value_tags(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        if not value.strip():
+            return []
+        return [part.strip() for part in re.split(r"[,，\s]+", value) if part.strip()]
+    return []
+
+
+def stable_candidate_tags(item: dict[str, Any], request: dict[str, Any]) -> list[str]:
+    tags: list[str] = []
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip().lower()
+        if not text or len(text) > 48 or text in tags:
+            return
+        tags.append(text)
+
+    source_type = str(item.get("source_type") or "")
+    add(source_type)
+    if source_type == "memory":
+        add(item.get("type"))
+        add(memory_bucket(item).replace(" ", "_"))
+        add(item.get("scope"))
+    elif source_type == "doc_chunk":
+        add(item.get("source_kind"))
+        add(doc_bucket(item))
+        add(item.get("reuse_scope"))
+    add(item.get("project"))
+    add(item.get("platform"))
+    add(infer_platform_token(request))
+    for tag in value_tags(item.get("tags")):
+        add(tag)
+    for term in sorted(strong_topic_overlap(item, request)):
+        add(term)
+    return tags[:10]
+
+
+def attach_candidate_summary(item: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+    title = candidate_title(item)
+    path = str(item.get("path") or "")
+    heading = str(item.get("heading") or "")
+    source_kind = str(item.get("source_kind") or "")
+    source_type = str(item.get("source_type") or "")
+    evidence = evidence_snippet(item, request, 320)
+    if source_type == "memory":
+        type_label = str(item.get("type") or "memory")
+        scope = str(item.get("scope") or "")
+        source = str(item.get("source") or "")
+        summary_parts = [part for part in (title, type_label, scope, source, evidence) if part]
+    else:
+        summary_parts = [part for part in (title, heading, source_kind, path, evidence) if part]
+    candidate_tags = stable_candidate_tags(item, request)
+    label_type = str(item.get("type") or source_kind or source_type or "candidate")
+    label_tags = ", ".join(candidate_tags[:5])
+    label = f"{label_type}: {title}"
+    if label_tags:
+        label = f"{label} [{label_tags}]"
+    item["candidate_title"] = title
+    item["candidate_summary"] = snippet(" | ".join(summary_parts), 520)
+    item["candidate_label"] = snippet(label, 180)
+    item["candidate_tags"] = candidate_tags
+    item["evidence_snippet"] = evidence
+    item["_rerank_text"] = item["candidate_summary"]
+    return item
+
+
+def candidate_ref(item: dict[str, Any]) -> str:
+    source_type = str(item.get("source_type") or "item")
+    item_id = item.get("id") or item.get("item_id")
+    return f"{source_type}:{item_id}" if item_id else source_type
+
+
+def public_candidate(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ref": candidate_ref(item),
+        "source_type": item.get("source_type"),
+        "id": item.get("id"),
+        "document_id": item.get("document_id"),
+        "type": item.get("type"),
+        "scope": item.get("scope"),
+        "title": item.get("candidate_title") or item.get("title") or item.get("heading"),
+        "label": item.get("candidate_label"),
+        "tags": item.get("candidate_tags") or [],
+        "summary": item.get("candidate_summary"),
+        "source_kind": item.get("source_kind"),
+        "path": item.get("path"),
+        "rank_score": item.get("rank_score"),
+        "rerank_score": item.get("rerank_score"),
+    }
+
+
+def candidate_sections(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return ""
+    lines = ["Recall candidates for agent selection:"]
+    for item in items:
+        summary = snippet(str(item.get("candidate_summary") or ""), 220)
+        lines.append(f"- {candidate_ref(item)} | {item.get('candidate_label') or candidate_title(item)}: {summary}")
+    return "\n".join(lines)
+
+
 def memory_line(item: dict[str, Any]) -> str:
     title = item.get("title") or f"memory {item.get('id')}"
     content = snippet(item.get("content", ""), 360)
@@ -355,7 +527,7 @@ def doc_line(item: dict[str, Any]) -> str:
     path = item.get("path") or ""
     title = item.get("title") or path
     heading = item.get("heading") or ""
-    text = snippet(item.get("content", ""), 280)
+    text = item.get("evidence_snippet") or snippet(item.get("content", ""), 280)
     label = title if not heading else f"{title} / {heading}"
     return f"- {path} | {label}: {text}"
 
@@ -412,18 +584,33 @@ def memory_bucket(item: dict[str, Any]) -> str:
     return "Other memory"
 
 
-def select_typed_memories(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+def select_typed_memories(
+    items: list[dict[str, Any]], limit: int, request: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
-    bucket_order = [
-        "User style",
-        "Route decisions",
-        "Pitfalls",
-        "Workflow and access",
-        "Project facts",
-        "System context",
-        "Other memory",
-    ]
+    prompt = prompt_tokens(request or {})
+    platform_or_hardware = bool((prompt & HARDWARE_DOC_TOKENS) or infer_platform_token(request or {}))
+    if platform_or_hardware and not (prompt & WORKFLOW_PROMPT_TOKENS):
+        bucket_order = [
+            "User style",
+            "Project facts",
+            "Route decisions",
+            "Pitfalls",
+            "Workflow and access",
+            "System context",
+            "Other memory",
+        ]
+    else:
+        bucket_order = [
+            "User style",
+            "Route decisions",
+            "Pitfalls",
+            "Workflow and access",
+            "Project facts",
+            "System context",
+            "Other memory",
+        ]
     quotas = {
         "User style": 1,
         "Route decisions": 2,
@@ -490,7 +677,7 @@ def vector_items(request: dict[str, Any]) -> list[dict[str, Any]]:
     if not bool(emb_cfg.get("allow_during_recall", False)):
         return []
     embedder = Embedder(emb_cfg)
-    vector = embedder.embed(str(request.get("prompt") or ""), prefix=str(emb_cfg.get("query_prefix", "")))
+    vector = embedder.embed_payload(str(request.get("prompt") or ""), prefix=str(emb_cfg.get("query_prefix", "")))
     if not vector:
         return []
     qdrant = QdrantLite(qdrant_config(CONFIG, profile))
@@ -670,29 +857,31 @@ def build_recall(payload: dict[str, Any]) -> dict[str, Any]:
         "cwd": str(payload.get("cwd", "")),
         "repo": str(payload.get("repo", "")),
         "branch": str(payload.get("branch", "")),
+        "include_user_preferences": bool(payload.get("include_user_preferences") or payload.get("include_preferences")),
     }
     limit_memories = max(3, min(int(payload.get("limit_memories", 5)), 5))
     limit_docs = max(2, min(int(payload.get("limit_docs", 3)), 3))
+    limit_candidates = max(3, min(int(payload.get("limit_candidates", limit_memories + limit_docs)), 12))
     fts_limit = int(CONFIG.get("recall", {}).get("fts_limit", 20))
+    plan = recall_plan(request)
+    request["recall_plan"] = plan
 
-    user_preferences = get_user_preferences(limit=5)
+    include_user_preferences = bool(request.get("include_user_preferences"))
+    user_preferences = get_user_preferences(limit=5) if include_user_preferences else []
     memory_map: dict[int, dict[str, Any]] = {}
-    for item in user_preferences + get_pinned_memories(limit=max(limit_memories, 5)) + search_memories(expanded_prompt, fts_limit):
-        merge_candidate(memory_map, item, int(item["id"]), "memory")
-
     doc_map: dict[int, dict[str, Any]] = {}
-    for item in search_document_chunks(expanded_prompt, fts_limit):
-        merge_candidate(doc_map, item, int(item["id"]), "doc_chunk")
-
     vector_memory_scores: dict[int, float] = {}
     vector_doc_scores: dict[int, float] = {}
-    for item in vector_items(request):
-        if item.get("source_type") == "memory" and item.get("item_id"):
-            key = int(item["item_id"])
-            vector_memory_scores[key] = max(vector_memory_scores.get(key, 0.0), float(item.get("vector_score") or 0))
-        elif item.get("source_type") == "doc_chunk" and item.get("item_id"):
-            key = int(item["item_id"])
-            vector_doc_scores[key] = max(vector_doc_scores.get(key, 0.0), float(item.get("vector_score") or 0))
+    vector_count = 0
+    if plan.get("use_vector"):
+        for item in vector_items(request):
+            vector_count += 1
+            if item.get("source_type") == "memory" and item.get("item_id"):
+                key = int(item["item_id"])
+                vector_memory_scores[key] = max(vector_memory_scores.get(key, 0.0), float(item.get("vector_score") or 0))
+            elif item.get("source_type") == "doc_chunk" and item.get("item_id"):
+                key = int(item["item_id"])
+                vector_doc_scores[key] = max(vector_doc_scores.get(key, 0.0), float(item.get("vector_score") or 0))
 
     for item in get_memories_by_ids(list(vector_memory_scores.keys())):
         key = int(item["id"])
@@ -702,8 +891,27 @@ def build_recall(payload: dict[str, Any]) -> dict[str, Any]:
         key = int(item["id"])
         merge_candidate(doc_map, item, key, "doc_chunk", vector_doc_scores.get(key, 0.0))
 
+    fts_memory_count = 0
+    fts_doc_count = 0
+    if include_user_preferences:
+        for item in user_preferences:
+            merge_candidate(memory_map, item, int(item["id"]), "memory")
+    if plan.get("include_memories"):
+        for item in get_pinned_memories(limit=max(limit_memories, 5)):
+            merge_candidate(memory_map, item, int(item["id"]), "memory")
+        if plan.get("use_fts"):
+            for item in search_memories(expanded_prompt, fts_limit):
+                fts_memory_count += 1
+                merge_candidate(memory_map, item, int(item["id"]), "memory")
+    if plan.get("include_docs") and plan.get("use_fts"):
+        for item in search_document_chunks(expanded_prompt, fts_limit):
+            fts_doc_count += 1
+            merge_candidate(doc_map, item, int(item["id"]), "doc_chunk")
+
     ranked_memory_candidates = [
-        item for item in rerank(list(memory_map.values()), request) if memory_applicable(item, request)
+        attach_candidate_summary(item, request)
+        for item in rerank(list(memory_map.values()), request)
+        if memory_applicable(item, request)
     ]
     mandatory_preference_ids = {int(item["id"]) for item in user_preferences if item.get("id")}
     mandatory_preferences = [
@@ -711,34 +919,86 @@ def build_recall(payload: dict[str, Any]) -> dict[str, Any]:
         for item in user_preferences
         if item.get("id") and int(item["id"]) in memory_map
     ]
-    ranked_memories = mandatory_preferences + select_typed_memories(
-        [item for item in ranked_memory_candidates if int(item.get("id") or 0) not in mandatory_preference_ids],
-        limit_memories,
-    )
+    rerank_cfg = dict(CONFIG.get("reranker") or {})
     ranked_doc_candidates = [
-        item for item in rerank(list(doc_map.values()), request) if doc_applicable(item, request)
+        attach_candidate_summary(item, request)
+        for item in rerank(list(doc_map.values()), request)
+        if doc_applicable(item, request)
     ]
-    ranked_docs = select_bucketed_doc_chunks(ranked_doc_candidates, limit_docs)
+    non_mandatory_candidates = [
+        item
+        for item in (ranked_memory_candidates + ranked_doc_candidates)
+        if not (item.get("source_type") == "memory" and int(item.get("id") or 0) in mandatory_preference_ids)
+    ]
+    reranked_candidates = neural_rerank(
+        non_mandatory_candidates,
+        request,
+        rerank_cfg,
+        limit_candidates,
+    )
+    ranked_memory_pool = [
+        item for item in reranked_candidates if item.get("source_type") == "memory"
+    ]
+    ranked_doc_pool = [
+        item for item in reranked_candidates if item.get("source_type") == "doc_chunk"
+    ]
+    ranked_memories = mandatory_preferences + select_typed_memories(
+        ranked_memory_pool, max(0, limit_memories - len(mandatory_preferences)), request
+    )
+    for item in mandatory_preferences:
+        attach_candidate_summary(item, request)
+    ranked_docs = select_bucketed_doc_chunks(ranked_doc_pool, limit_docs)
+    auto_include_docs = bool(payload.get("auto_include_docs", False))
+    auto_include_memories = bool(payload.get("auto_include_memories", False))
+    include_candidate_context = bool(payload.get("include_candidate_context", True))
+    recall_candidates = mandatory_preferences + reranked_candidates
 
-    mark_memories_used([int(item["id"]) for item in ranked_memories if item.get("id")])
+    if auto_include_memories:
+        mark_memories_used([int(item["id"]) for item in ranked_memories if item.get("id")])
 
     parts: list[str] = []
     trunk_text = trunk_section(payload)
     if trunk_text:
         parts.append(trunk_text)
-    if ranked_memories:
+    if ranked_memories and auto_include_memories:
         parts.append(memory_sections(ranked_memories))
-    if ranked_docs:
+    if recall_candidates and include_candidate_context:
+        parts.append(candidate_sections(recall_candidates))
+    if ranked_docs and auto_include_docs:
         parts.append("Relevant docs:\n" + "\n".join(doc_line(item) for item in ranked_docs))
     result = {
         "additionalContext": "\n\n".join(part for part in parts if part),
-        "items": ranked_memories + ranked_docs,
+        "items": (ranked_memories if auto_include_memories else []) + (ranked_docs if auto_include_docs else []),
+        "recall_candidates": [public_candidate(item) for item in recall_candidates],
     }
+    if ranked_docs and not auto_include_docs:
+        result["doc_candidates"] = [
+            {
+                "id": item.get("id"),
+                "document_id": item.get("document_id"),
+                "title": item.get("candidate_title") or item.get("title") or item.get("heading"),
+                "summary": item.get("candidate_summary"),
+                "source_kind": item.get("source_kind"),
+                "path": item.get("path"),
+                "rank_score": item.get("rank_score"),
+                "rerank_score": item.get("rerank_score"),
+            }
+            for item in ranked_docs
+        ]
     if bool(payload.get("include_trace") or payload.get("trace")):
         result["trace"] = {
             "intent": expansion_trace(original_prompt, expanded_prompt),
+            "plan": plan,
+            "vector_candidates": vector_count,
+            "fts_memory_candidates": fts_memory_count,
+            "fts_doc_candidates": fts_doc_count,
             "memory_candidates": len(ranked_memory_candidates),
             "doc_candidates": len(ranked_doc_candidates),
+            "recall_candidates": len(recall_candidates),
+            "reranker_enabled": bool(rerank_cfg.get("enabled", False)),
+            "reranker_input": "candidate_summary",
+            "auto_include_memories": auto_include_memories,
+            "auto_include_docs": auto_include_docs,
             "selected_memory_types": [item.get("type") for item in ranked_memories],
             "selected_doc_buckets": [doc_bucket(item) for item in ranked_docs],
         }

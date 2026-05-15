@@ -390,8 +390,13 @@ TOOLS: dict[str, dict[str, Any]] = {
         "branch": {"type": "string"},
         "limit_memories": {"type": "integer", "default": 5},
         "limit_docs": {"type": "integer", "default": 3},
+        "limit_candidates": {"type": "integer", "default": 8},
         "trunk_id": {"type": "string"},
         "conversation_id": {"type": "string"},
+        "include_user_preferences": {"type": "boolean", "default": False},
+        "auto_include_memories": {"type": "boolean", "default": False},
+        "auto_include_docs": {"type": "boolean", "default": False},
+        "include_candidate_context": {"type": "boolean", "default": True},
         "include_trace": {"type": "boolean", "default": False},
     }, ["prompt"])},
     "memory_upsert": {"description": "Create or update a memory.", "handler": tool_memory_upsert, "inputSchema": schema({

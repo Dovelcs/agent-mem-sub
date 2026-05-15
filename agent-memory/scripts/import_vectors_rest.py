@@ -18,7 +18,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Import JSONL vectors through the lightweight REST Qdrant client.")
     parser.add_argument("input", nargs="?", default="/opt/agent-memory/data/vectors/agent_vectors.jsonl")
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--collection", default="agent_chunks_bge_m3")
+    parser.add_argument("--collection", default="agent_chunks_bge_m3_hybrid")
     parser.add_argument("--url", default="http://127.0.0.1:6333")
     args = parser.parse_args()
 
@@ -28,13 +28,17 @@ def main() -> int:
         print(json.dumps({"ok": False, "error": "no points"}, ensure_ascii=False))
         return 2
 
-    vector_size = len(points[0]["vector"])
+    first_vector = points[0]["vector"]
+    vector_size = len(first_vector.get("vector") or first_vector.get("dense") or []) if isinstance(first_vector, dict) else len(first_vector)
     qdrant = QdrantLite({
         "enabled": True,
         "url": args.url,
         "collection": args.collection,
         "timeout_seconds": 10,
         "vector_size": vector_size,
+        "hybrid": True,
+        "dense_vector_name": "dense",
+        "sparse_vector_name": "sparse",
     })
     qdrant.ensure_collection(vector_size)
     total = 0

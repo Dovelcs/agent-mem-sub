@@ -13,7 +13,7 @@ mkdir -p "$WORK_DIR"
 
 stage_openwrt() {
   ssh -i "$SSH_KEY" -o BatchMode=yes "$REMOTE" \
-    "mkdir -p '$REMOTE_ROOT/data/model-cache' '$REMOTE_ROOT/tmep/agent-memory-vector-cache/bge_m3' '$REMOTE_ROOT/tmep/agent-memory-vector-cache/qwen3_4b'"
+    "mkdir -p '$REMOTE_ROOT/data/model-cache' '$REMOTE_ROOT/tmep/agent-memory-vector-cache/bge_m3'"
   rsync -a --delete \
     -e "ssh -i $SSH_KEY -o BatchMode=yes" \
     "$MODEL_CACHE/bge-m3" \

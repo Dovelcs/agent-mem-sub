@@ -339,14 +339,59 @@ def memory_candidate(item: dict[str, Any], summary_chars: int) -> dict[str, Any]
 
 def search_candidates(args: argparse.Namespace) -> int:
     started = time.perf_counter()
-    result = request_json(
-        "POST",
-        "/memory/search",
-        {"query": args.query, "limit": args.limit, "cwd": args.cwd, "repo": args.repo, "branch": args.branch},
-        timeout=5.0,
-    )
-    items = result.get("items", [])
-    candidates = [memory_candidate(item, args.summary_chars) for item in items[: args.limit]]
+    if args.legacy_memory_search:
+        result = request_json(
+            "POST",
+            "/memory/search",
+            {"query": args.query, "limit": args.limit, "cwd": args.cwd, "repo": args.repo, "branch": args.branch},
+            timeout=5.0,
+        )
+        items = result.get("items", [])
+        candidates = [memory_candidate(item, args.summary_chars) for item in items[: args.limit]]
+        next_hint = f"Select relevant ids, then run: python3 {CLI_ENTRY} get-memory <id> [<id> ...]"
+    else:
+        result = request_json(
+            "POST",
+            "/recall",
+            {
+                "prompt": args.query,
+                "limit_candidates": args.limit,
+                "limit_memories": min(max(args.limit, 3), 5),
+                "limit_docs": min(max(args.limit, 2), 3),
+                "cwd": args.cwd,
+                "repo": args.repo,
+                "branch": args.branch,
+                "include_candidate_context": False,
+                "auto_include_memories": False,
+                "auto_include_docs": False,
+            },
+            timeout=8.0,
+        )
+        candidates = []
+        for item in result.get("recall_candidates", [])[: args.limit]:
+            score = item.get("rerank_score", item.get("rank_score"))
+            try:
+                score_value: float | None = round(float(score), 4)
+            except Exception:
+                score_value = None
+            candidates.append(
+                {
+                    "ref": item.get("ref"),
+                    "id": item.get("id"),
+                    "type": item.get("type") or item.get("source_kind") or item.get("source_type"),
+                    "title": item.get("title"),
+                    "label": item.get("label"),
+                    "score": score_value,
+                    "scope": item.get("scope"),
+                    "source": item.get("path") or item.get("source_kind"),
+                    "updated_at": item.get("updated_at"),
+                    "summary": compact(str(item.get("summary") or ""), args.summary_chars),
+                }
+            )
+        next_hint = (
+            f"Select memory refs, then run: python3 {CLI_ENTRY} get-memory <id> [<id> ...]; "
+            "doc_chunk refs can be fetched through /docs/chunk/get."
+        )
     if args.json:
         print(
             json.dumps(
@@ -357,7 +402,7 @@ def search_candidates(args: argparse.Namespace) -> int:
                     "count": len(candidates),
                     "ms": round((time.perf_counter() - started) * 1000, 2),
                     "candidates": candidates,
-                    "next": f"Select relevant ids, then run: python3 {CLI_ENTRY} get-memory <id> [<id> ...]",
+                    "next": next_hint,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -365,14 +410,14 @@ def search_candidates(args: argparse.Namespace) -> int:
         )
     else:
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
-        print(f"memory candidates: {len(candidates)} | ms={elapsed_ms} | query={args.query}")
-        print("format: id | type | score | title | summary")
+        print(f"recall candidates: {len(candidates)} | ms={elapsed_ms} | query={args.query}")
+        print("format: ref | type | score | label | summary")
         for item in candidates:
             print(
-                f"{item.get('id')} | {item.get('type') or ''} | {item.get('score')} | "
-                f"{item.get('title') or ''} | {item.get('summary') or ''}"
+                f"{item.get('ref') or item.get('id')} | {item.get('type') or ''} | {item.get('score')} | "
+                f"{item.get('label') or item.get('title') or ''} | {item.get('summary') or ''}"
             )
-        print(f"next: python3 {CLI_ENTRY} get-memory <id> [<id> ...]")
+        print(f"next: {next_hint}")
     return 0 if result.get("ok", True) else 1
 
 
@@ -679,9 +724,10 @@ def main() -> int:
     candidates_parser.add_argument("--cwd", default="")
     candidates_parser.add_argument("--repo", default="")
     candidates_parser.add_argument("--branch", default="")
+    candidates_parser.add_argument("--legacy-memory-search", action="store_true", help="Use the old SQLite memory-only search path.")
 
     get_memory_parser = sub.add_parser("get-memory", help="Read full memory content for selected ids.")
-    get_memory_parser.add_argument("ids", nargs="+", type=int)
+    get_memory_parser.add_argument("ids", nargs="+")
     get_memory_parser.add_argument("--no-mark-used", action="store_true")
 
     write_fact_parser = sub.add_parser("write-fact")

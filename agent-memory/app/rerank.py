@@ -4,6 +4,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from embedding import rerank_http
+
 
 PLATFORM_RE = re.compile(r"(?<![a-z0-9])(rk\d{4}[a-z]?|rv\d{4}[a-z]?|qsm\d+|qsc\d+|sg\d+|sh\d+)(?![a-z0-9])", re.IGNORECASE)
 ROCKCHIP_PLATFORMS = {"rk3562", "rk3568", "rk3576", "rk3588", "rk3566", "rv1126", "rv1106", "rv1103"}
@@ -201,7 +203,7 @@ def score_item(item: dict[str, Any], request: dict[str, Any]) -> float:
     recency = _parse_time(item.get("updated_at"))
     return (
         min(text_score, 8.0) * 0.45
-        + vector_score * 6.5
+        + vector_score * 12.0
         + hint_score(item, request) * 1.2
         + importance * 1.0
         + confidence * 0.5
@@ -214,3 +216,41 @@ def rerank(items: list[dict[str, Any]], request: dict[str, Any]) -> list[dict[st
         annotate_item(item, request)
         item["rank_score"] = score_item(item, request)
     return sorted(items, key=lambda x: x.get("rank_score", 0.0), reverse=True)
+
+
+def rerank_text(item: dict[str, Any]) -> str:
+    if item.get("_rerank_text"):
+        return str(item.get("_rerank_text") or "")
+    return " ".join(
+        str(item.get(key) or "")
+        for key in ("title", "heading", "content", "path", "scope", "source", "project", "platform", "customer")
+    )
+
+
+def neural_rerank(
+    items: list[dict[str, Any]], request: dict[str, Any], config: dict[str, Any], limit: int
+) -> list[dict[str, Any]]:
+    if not items or limit <= 0:
+        return []
+    candidate_limit = int(config.get("candidate_limit", max(limit * 4, limit)))
+    candidates = rerank(items, request)[: max(candidate_limit, limit)]
+    for idx, item in enumerate(candidates):
+        item["_rerank_id"] = idx
+        item["_rerank_text"] = rerank_text(item)
+    scores = rerank_http(str(request.get("prompt") or ""), candidates, config)
+    if scores:
+        min_score = float(config.get("min_score", config.get("min_rerank_score", 0.05)) or 0.0)
+        for item in candidates:
+            key = item.get("_rerank_id")
+            if key in scores:
+                item["rerank_score"] = scores[key]
+                base_score = float(item.get("rank_score") or 0.0)
+                item["rank_score"] = scores[key] * 100.0 + base_score * 0.01
+                item["rerank_passed"] = scores[key] >= min_score
+        if min_score > 0:
+            candidates = [item for item in candidates if bool(item.get("rerank_passed"))]
+        candidates = sorted(candidates, key=lambda item: item.get("rank_score", 0.0), reverse=True)
+    for item in candidates:
+        item.pop("_rerank_id", None)
+        item.pop("_rerank_text", None)
+    return candidates[:limit]

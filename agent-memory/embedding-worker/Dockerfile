@@ -19,9 +19,10 @@ RUN pip install --no-cache-dir \
       uvicorn==0.34.0 \
       sentence-transformers==3.3.1 \
       sentencepiece==0.2.0 \
+      FlagEmbedding==1.3.5 \
       qdrant-client==1.12.1
 
 WORKDIR /work
-COPY build_vectors.py import_vectors.py server.py /work/
+COPY backend.py build_vectors.py import_vectors.py server.py /work/
 
 ENTRYPOINT ["python", "/work/build_vectors.py"]

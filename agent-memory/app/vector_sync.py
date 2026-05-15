@@ -13,7 +13,13 @@ def qdrant(profile: str | None = None) -> QdrantLite:
     return QdrantLite(qdrant_config(CONFIG, profile or default_profile(CONFIG)))
 
 
-def memory_vector_point(memory: dict[str, Any], vector: list[float]) -> dict[str, Any]:
+def dense_vector_size(vector: Any) -> int:
+    if isinstance(vector, dict):
+        return len(vector.get("vector") or [])
+    return len(vector or [])
+
+
+def memory_vector_point(memory: dict[str, Any], vector: Any) -> dict[str, Any]:
     memory_item = {**memory, "source_type": "memory"}
     return {
         "id": 1000000000 + int(memory["id"]),
@@ -43,11 +49,11 @@ def upsert_memory_vector(memory: dict[str, Any], profile: str | None = None) -> 
     embedder = Embedder(embedding_config(CONFIG, selected))
     if not embedder.available():
         return
-    vector = embedder.embed(f"{memory.get('title','')}\n{memory.get('content','')}")
+    vector = embedder.embed_payload(f"{memory.get('title','')}\n{memory.get('content','')}")
     if not vector:
         return
     client = qdrant(selected)
-    client.ensure_collection(len(vector))
+    client.ensure_collection(dense_vector_size(vector))
     client.upsert([memory_vector_point(memory, vector)])
 
 

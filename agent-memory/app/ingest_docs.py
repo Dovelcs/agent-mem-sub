@@ -180,10 +180,10 @@ def upsert_vectors(chunks: list[dict[str, Any]]) -> None:
     points = []
     vector_size = None
     for chunk in chunks:
-        vector = embedder.embed(f"{chunk.get('heading','')}\n{chunk.get('content','')}")
+        vector = embedder.embed_payload(f"{chunk.get('heading','')}\n{chunk.get('content','')}")
         if not vector:
             continue
-        vector_size = len(vector)
+        vector_size = len(vector.get("vector") or [])
         points.append({
             "id": int(chunk["id"]),
             "vector": vector,

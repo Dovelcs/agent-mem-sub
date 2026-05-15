@@ -7,7 +7,7 @@ VECTORS="${1:-$ROOT/data/vectors/agent_vectors.jsonl}"
 if [ "$#" -gt 0 ]; then shift; fi
 QDRANT_URL="${1:-http://127.0.0.1:6333}"
 if [ "$#" -gt 0 ]; then shift; fi
-COLLECTION="${AGENT_MEMORY_QDRANT_COLLECTION:-agent_chunks_bge_m3}"
+COLLECTION="${AGENT_MEMORY_QDRANT_COLLECTION:-agent_chunks_bge_m3_hybrid}"
 
 VECTORS="$(readlink -f "$VECTORS")"
 docker build -t "$IMAGE" "$ROOT/embedding-worker"

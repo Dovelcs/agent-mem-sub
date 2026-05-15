@@ -72,10 +72,10 @@ def process_one(path: Path, dirs: dict[str, Path], embedder: Any, qdrant: Any, m
         if not memory.get("id"):
             raise ValueError("record missing memory.id")
         text = f"{memory.get('title','')}\n{memory.get('content','')}"
-        vector = embedder.embed(text)
+        vector = embedder.embed_payload(text)
         if not vector:
             raise RuntimeError("embedding returned no vector")
-        qdrant.ensure_collection(len(vector))
+        qdrant.ensure_collection(len(vector.get("vector") or []))
         qdrant.upsert([memory_vector_point(memory, vector)])
         record["processed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         done_path = move_record(path, dirs["done"], record)

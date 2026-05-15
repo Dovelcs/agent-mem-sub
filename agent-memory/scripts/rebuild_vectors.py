@@ -50,10 +50,10 @@ def main() -> None:
 
     for row in memories:
         data = dict(row)
-        vector = embedder.embed(f"{data.get('title','')}\n{data.get('content','')}")
+        vector = embedder.embed_payload(f"{data.get('title','')}\n{data.get('content','')}")
         if not vector:
             continue
-        vector_size = len(vector)
+        vector_size = len(vector.get("vector") or [])
         memory_item = {**data, "source_type": "memory"}
         points.append({
             "id": 1000000000 + int(data["id"]),
@@ -77,10 +77,10 @@ def main() -> None:
 
     for row in chunks:
         data = dict(row)
-        vector = embedder.embed(f"{data.get('heading','')}\n{data.get('content','')}")
+        vector = embedder.embed_payload(f"{data.get('heading','')}\n{data.get('content','')}")
         if not vector:
             continue
-        vector_size = len(vector)
+        vector_size = len(vector.get("vector") or [])
         points.append({
             "id": int(data["id"]),
             "vector": vector,

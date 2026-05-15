@@ -21,7 +21,7 @@ exec docker run --rm --name "$NAME" --network host \
   --provider http \
   --http-url "${AGENT_MEMORY_BGE_HTTP_URL:-http://127.0.0.1:18090}" \
   --qdrant-url "${AGENT_MEMORY_QDRANT_URL:-http://127.0.0.1:6333}" \
-  --collection "${AGENT_MEMORY_QDRANT_COLLECTION:-agent_chunks_bge_m3}" \
+  --collection "${AGENT_MEMORY_QDRANT_COLLECTION:-agent_chunks_bge_m3_hybrid}" \
   --profile bge_m3 \
   --batch-size "${AGENT_MEMORY_VECTOR_CACHE_BATCH_SIZE:-1}" \
   --sleep-seconds "$SLEEP_SECONDS" \

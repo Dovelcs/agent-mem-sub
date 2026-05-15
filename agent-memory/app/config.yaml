@@ -9,9 +9,12 @@ server:
 qdrant:
   enabled: true
   url: http://127.0.0.1:6333
-  collection: agent_chunks_bge_m3
+  collection: agent_chunks_bge_m3_hybrid
   timeout_seconds: 3.0
   vector_size: 1024
+  hybrid: true
+  dense_vector_name: dense
+  sparse_vector_name: sparse
 
 embedding:
   provider: http
@@ -24,13 +27,25 @@ embedding:
   allow_during_recall: true
   timeout_seconds: 2.5
 
+reranker:
+  enabled: true
+  provider: http
+  local_model: /models/bge-reranker-v2-m3
+  http_url: http://100.114.74.111:18091
+  timeout_seconds: 20.0
+  candidate_limit: 12
+  min_score: 0.5
+
 vector_profiles:
   default: bge_m3
   profiles:
     bge_m3:
       qdrant:
-        collection: agent_chunks_bge_m3
+        collection: agent_chunks_bge_m3_hybrid
         vector_size: 1024
+        hybrid: true
+        dense_vector_name: dense
+        sparse_vector_name: sparse
       embedding:
         provider: http
         local_model: /models/bge-m3
@@ -39,30 +54,15 @@ vector_profiles:
         document_prefix: ""
         allow_during_recall: true
         timeout_seconds: 2.5
-    qwen3_4b:
-      qdrant:
-        collection: agent_chunks_qwen3_4b
-        vector_size: 2560
-      embedding:
-        provider: http
-        local_model: Qwen/Qwen3-Embedding-4B
-        http_url: http://100.114.74.111:18089
-        query_prefix: "Instruct: Given a user request to recall durable agent-memory facts and documentation, retrieve relevant memories and document chunks.\nQuery: "
-        document_prefix: ""
-        allow_during_recall: false
-        timeout_seconds: 0.8
 
 vector_cache:
   enabled: true
   path: ../tmep/agent-memory-vector-cache
   targets:
     - bge_m3
-    - qwen3_4b
   profiles:
     bge_m3:
       path: ../tmep/agent-memory-vector-cache/bge_m3
-    qwen3_4b:
-      path: ../tmep/agent-memory-vector-cache/qwen3_4b
   max_attempts: 3
 
 ingest:

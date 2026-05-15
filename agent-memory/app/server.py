@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from db import (
     CONFIG,
+    get_document_chunks_by_ids,
     get_memories_by_ids,
     get_user_preferences,
     init_db,
@@ -58,9 +60,18 @@ class SearchRequest(BaseModel):
 
 
 class MemoryGetRequest(BaseModel):
-    id: int | None = None
-    ids: list[int] = Field(default_factory=list)
+    id: int | str | None = None
+    ids: list[int | str] = Field(default_factory=list)
+    ref: str = ""
+    refs: list[str] = Field(default_factory=list)
     mark_used: bool = True
+
+
+class DocChunkGetRequest(BaseModel):
+    id: int | str | None = None
+    ids: list[int | str] = Field(default_factory=list)
+    ref: str = ""
+    refs: list[str] = Field(default_factory=list)
 
 
 class DocsIngestRequest(BaseModel):
@@ -81,6 +92,11 @@ class RecallRequest(BaseModel):
     session_id: str = ""
     limit_memories: int = 5
     limit_docs: int = 3
+    limit_candidates: int = 8
+    include_user_preferences: bool = False
+    auto_include_memories: bool = False
+    auto_include_docs: bool = False
+    include_candidate_context: bool = True
     include_trace: bool = False
 
 
@@ -182,6 +198,45 @@ def _model_data_set(model: Any) -> dict[str, Any]:
     return model.dict(exclude_unset=True)
 
 
+def _candidate_id(value: Any, expected_prefix: str = "") -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    text = str(value).strip()
+    if not text:
+        return None
+    if expected_prefix:
+        match = re.fullmatch(rf"{re.escape(expected_prefix)}:(\d+)", text)
+        if match:
+            return int(match.group(1))
+    if re.fullmatch(r"\d+", text):
+        return int(text)
+    match = re.fullmatch(r"(?:memory|doc_chunk):(\d+)", text)
+    if match and not expected_prefix:
+        return int(match.group(1))
+    return None
+
+
+def _candidate_ids(id_value: Any, ids_value: list[Any], ref: str = "", refs: list[str] | None = None, expected_prefix: str = "") -> list[int]:
+    values: list[Any] = []
+    if id_value is not None:
+        values.append(id_value)
+    values.extend(ids_value or [])
+    if ref:
+        values.append(ref)
+    values.extend(refs or [])
+    result: list[int] = []
+    seen: set[int] = set()
+    for value in values:
+        item_id = _candidate_id(value, expected_prefix)
+        if item_id is None or item_id in seen:
+            continue
+        result.append(item_id)
+        seen.add(item_id)
+    return result
+
+
 def build_recall(request: RecallRequest) -> dict[str, Any]:
     return build_recall_payload(_model_data(request))
 
@@ -262,9 +317,7 @@ def memory_search(req: SearchRequest) -> dict[str, Any]:
 
 @app.post("/memory/get")
 def memory_get(req: MemoryGetRequest) -> dict[str, Any]:
-    ids = list(req.ids)
-    if req.id is not None:
-        ids.insert(0, int(req.id))
+    ids = _candidate_ids(req.id, req.ids, req.ref, req.refs, "memory")
     memories = get_memories_by_ids(ids)
     if req.mark_used:
         mark_memories_used([int(item["id"]) for item in memories if item.get("id")])
@@ -344,6 +397,13 @@ def docs_search(req: SearchRequest) -> dict[str, Any]:
     request = {"prompt": req.query, "cwd": req.cwd, "repo": req.repo, "branch": req.branch}
     ranked = rerank(candidates, request)
     return {"ok": True, "items": select_bucketed_doc_chunks(ranked, req.limit)}
+
+
+@app.post("/docs/chunk/get")
+def docs_chunk_get(req: DocChunkGetRequest) -> dict[str, Any]:
+    ids = _candidate_ids(req.id, req.ids, req.ref, req.refs, "doc_chunk")
+    chunks = get_document_chunks_by_ids(ids)
+    return {"ok": bool(chunks), "items": chunks, "chunk": chunks[0] if chunks else None}
 
 
 @app.post("/recall")

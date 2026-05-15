@@ -46,6 +46,8 @@ def hook_to_recall_payload(data: dict[str, Any], args: argparse.Namespace) -> di
         "session_id": data.get("session_id") or "",
         "limit_memories": args.limit_memories,
         "limit_docs": args.limit_docs,
+        "include_user_preferences": args.include_user_preferences,
+        "auto_include_docs": args.auto_include_docs,
     }
 
 
@@ -69,6 +71,8 @@ def main() -> None:
     parser.add_argument("--timeout", type=float, default=1.8)
     parser.add_argument("--limit-memories", type=int, default=5)
     parser.add_argument("--limit-docs", type=int, default=3)
+    parser.add_argument("--include-user-preferences", action="store_true")
+    parser.add_argument("--auto-include-docs", action="store_true")
     args = parser.parse_args()
 
     data = read_stdin_json()

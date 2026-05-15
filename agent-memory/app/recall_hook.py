@@ -365,6 +365,45 @@ def discover_session(
     return requested_key, None
 
 
+def session_key_and_path(
+    data: dict[str, Any],
+    cwd: str,
+    state: dict[str, Any],
+) -> tuple[str, Path | None]:
+    session_root = Path(os.environ.get("AGENT_MEMORY_SESSION_ROOT", DEFAULT_SESSION_ROOT)).expanduser()
+    scan_limit = int(os.environ.get("AGENT_MEMORY_SESSION_SCAN_LIMIT", str(DEFAULT_SESSION_SCAN_LIMIT)))
+    return discover_session(data, cwd, state, session_root, scan_limit)
+
+
+def should_include_user_preferences(data: dict[str, Any], cwd: str, state_path: Path) -> bool:
+    state = load_json_file(state_path)
+    sessions = state.setdefault("sessions", {})
+    if not isinstance(sessions, dict):
+        sessions = {}
+        state["sessions"] = sessions
+
+    session_key, session_path = session_key_and_path(data, cwd, state)
+    if not session_key:
+        session_key = f"cwd:{os.path.abspath(cwd or os.getcwd())}"
+
+    entry = sessions.get(session_key)
+    if not isinstance(entry, dict):
+        entry = {}
+    if entry.get("preferences_injected"):
+        return False
+
+    entry.update(
+        {
+            "cwd": cwd,
+            "session_path": str(session_path) if session_path else entry.get("session_path", ""),
+            "preferences_injected": True,
+        }
+    )
+    sessions[session_key] = entry
+    save_json_file(state_path, state)
+    return True
+
+
 def compaction_allows_recall(data: dict[str, Any], cwd: str, state_path: Path) -> bool:
     session_root = Path(os.environ.get("AGENT_MEMORY_SESSION_ROOT", DEFAULT_SESSION_ROOT)).expanduser()
     scan_limit = int(os.environ.get("AGENT_MEMORY_SESSION_SCAN_LIMIT", str(DEFAULT_SESSION_SCAN_LIMIT)))
@@ -441,7 +480,12 @@ def main() -> int:
     branch = str(data.get("branch") or args.branch or git_value(["git", "branch", "--show-current"], cwd))
     state_path = Path(os.environ.get("AGENT_MEMORY_RECALL_STATE", DEFAULT_STATE_PATH)).expanduser()
     mode = os.environ.get("AGENT_MEMORY_RECALL_MODE", "action_or_compact_or_explicit")
-    preferences = fetch_user_preferences(args.url, args.timeout, args.limit_user_preferences)
+    include_preferences = should_include_user_preferences(data, cwd, state_path)
+    preferences = (
+        fetch_user_preferences(args.url, args.timeout, args.limit_user_preferences)
+        if include_preferences
+        else []
+    )
     should_include_reminder = should_recall(prompt, data, cwd, mode, state_path)
 
     if not preferences and not should_include_reminder:
@@ -454,3 +498,7 @@ def main() -> int:
     output["hookSpecificOutput"]["additionalContext"] = "\n\n".join(part for part in parts if part)
     print(json.dumps(output, ensure_ascii=False))
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

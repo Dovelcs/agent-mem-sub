@@ -49,7 +49,7 @@ class Embedder:
         if self.provider == "http":
             try:
                 resp = requests.get(
-                    self.config.get("http_url", "http://127.0.0.1:18089").rstrip("/") + "/health",
+                    self.config.get("http_url", "http://127.0.0.1:18090").rstrip("/") + "/health",
                     timeout=min(self.timeout, 0.5),
                 )
                 return resp.ok and bool(resp.json().get("ok"))
@@ -64,17 +64,25 @@ class Embedder:
         return False
 
     def embed(self, text: str, prefix: str | None = None) -> list[float] | None:
+        payload = self.embed_payload(text, prefix)
+        if not payload:
+            return None
+        return payload.get("vector") or None
+
+    def embed_payload(self, text: str, prefix: str | None = None) -> dict[str, Any] | None:
         text = (text or "").strip()
         if not text or not self.available():
             return None
         try:
             with time_limit(self.timeout):
                 if self.provider == "openai":
-                    return self._embed_openai(text, prefix)
+                    vector = self._embed_openai(text, prefix)
+                    return {"vector": vector, "sparse": None} if vector else None
                 if self.provider == "http":
                     return self._embed_http(text, prefix)
                 if self.provider == "local":
-                    return self._embed_local(text, prefix)
+                    vector = self._embed_local(text, prefix)
+                    return {"vector": vector, "sparse": None} if vector else None
         except Exception:
             return None
         return None
@@ -106,8 +114,8 @@ class Embedder:
         data = resp.json()
         return [float(v) for v in data["data"][0]["embedding"]]
 
-    def _embed_http(self, text: str, prefix: str | None = None) -> list[float] | None:
-        url = self.config.get("http_url", "http://127.0.0.1:18089").rstrip("/") + "/embed"
+    def _embed_http(self, text: str, prefix: str | None = None) -> dict[str, Any] | None:
+        url = self.config.get("http_url", "http://127.0.0.1:18090").rstrip("/") + "/embed"
         resp = requests.post(
             url,
             json={"text": text, "prefix": self._prefix(prefix)},
@@ -117,4 +125,43 @@ class Embedder:
         data = resp.json()
         if not data.get("ok"):
             return None
-        return [float(v) for v in data.get("vector") or []]
+        vector = [float(v) for v in data.get("vector") or []]
+        sparse = data.get("sparse")
+        if isinstance(sparse, dict):
+            try:
+                sparse = {
+                    "indices": [int(value) for value in sparse.get("indices") or []],
+                    "values": [float(value) for value in sparse.get("values") or []],
+                }
+            except Exception:
+                sparse = None
+            if sparse and len(sparse["indices"]) != len(sparse["values"]):
+                sparse = None
+        else:
+            sparse = None
+        return {"vector": vector, "sparse": sparse}
+
+
+def rerank_http(query: str, items: list[dict[str, Any]], config: dict[str, Any]) -> dict[Any, float]:
+    if not bool(config.get("enabled", False)) or not query or not items:
+        return {}
+    if str(config.get("provider", "http")) != "http":
+        return {}
+    url = str(config.get("http_url", "http://127.0.0.1:18091")).rstrip("/") + "/rerank"
+    timeout = float(config.get("timeout_seconds", 3.0))
+    payload_items = [
+        {"id": item.get("_rerank_id"), "text": item.get("_rerank_text", "")}
+        for item in items
+        if item.get("_rerank_id") is not None and item.get("_rerank_text")
+    ]
+    if not payload_items:
+        return {}
+    try:
+        resp = requests.post(url, json={"query": query, "items": payload_items}, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("ok"):
+            return {}
+        return {score["id"]: float(score.get("score") or 0.0) for score in data.get("scores") or []}
+    except Exception:
+        return {}

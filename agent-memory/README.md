@@ -4,6 +4,11 @@ This is a local personal memory and document recall service for Codex and other
 agents. It uses SQLite WAL + FTS5 for durable lexical recall, optional Qdrant
 vectors for semantic recall, and FastAPI for local HTTP access.
 
+For machines that only need to use the existing OpenWrt-hosted memory service,
+see [REMOTE_CLIENT_SETUP.md](REMOTE_CLIENT_SETUP.md). Those clients only need
+Tailscale access and the helper script; they do not need to run Qdrant,
+embedding, or reranker services locally.
+
 ## Layout
 
 ```text
@@ -226,7 +231,10 @@ cd /home/donovan/samba/codex-database/agent-memory
 sh scripts/docker-build-vectors.sh ./agent.db ./data/vectors
 ```
 
-The default model is `intfloat/multilingual-e5-small`. Override it with:
+`scripts/docker-build-vectors.sh` keeps the original
+`intfloat/multilingual-e5-small` default for legacy offline exports. The live
+OpenWrt recall path uses bge-m3 hybrid vectors. Override the offline export
+model when needed:
 
 ```sh
 AGENT_MEMORY_EMBED_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 \
@@ -247,8 +255,7 @@ safer workflow is to generate `agent_vectors.jsonl` locally, copy it to
 
 New memory writes use SQLite as the source of truth first, then queue a small
 JSON job under `../tmep/agent-memory-vector-cache/pending` by default. This
-keeps the write path fast and avoids starting Qwen3 or PyTorch inside the API
-process.
+keeps the write path fast and avoids running PyTorch inside the API process.
 
 Check the queue:
 
@@ -256,13 +263,15 @@ Check the queue:
 curl -s http://127.0.0.1:18088/memory/vector_cache
 ```
 
-Drain the queue with the local Docker embedding image at low resource usage:
+Drain the queue with the Docker embedding image:
 
 ```sh
-AGENT_MEMORY_EMBED_MODEL=Qwen/Qwen3-Embedding-4B \
+AGENT_MEMORY_EMBED_MODEL=/models/bge-m3 \
+AGENT_MEMORY_VECTOR_PROFILE=bge_m3 \
+AGENT_MEMORY_QDRANT_COLLECTION=agent_chunks_bge_m3_hybrid \
 AGENT_MEMORY_VECTOR_CACHE_BATCH_SIZE=1 \
 AGENT_MEMORY_VECTOR_CACHE_SLEEP_SECONDS=1.0 \
-  sh scripts/docker-drain-vector-cache.sh ./tmep/agent-memory-vector-cache http://127.0.0.1:6333
+  sh scripts/docker-drain-vector-cache.sh ./tmep/agent-memory-vector-cache/bge_m3 http://127.0.0.1:6333
 ```
 
 The drain worker processes one memory job at a time, sleeps between items, and
@@ -270,36 +279,9 @@ upserts deterministic memory points into the configured Qdrant collection. Use
 an SSH tunnel or run it on the host that can reach Qdrant when OpenWrt keeps
 Qdrant bound to `127.0.0.1`.
 
-For the live OpenWrt deployment, use the wrapper that pulls pending jobs from
-OpenWrt, opens a Qdrant SSH tunnel, drains locally with Qwen3, and syncs
-done/failed state back:
-
-```sh
-AGENT_MEMORY_EMBED_MODEL=Qwen/Qwen3-Embedding-4B \
-AGENT_MEMORY_VECTOR_CACHE_BATCH_SIZE=1 \
-AGENT_MEMORY_VECTOR_CACHE_SLEEP_SECONDS=1.0 \
-  sh scripts/docker-drain-openwrt-vector-cache.sh
-```
-
-Install the local five-minute auto-drain timer:
-
-```sh
-sh scripts/install-vector-cache-timer.sh
-```
-
-The timer runs `scripts/auto-drain-openwrt-vector-cache.sh`. Each tick only
-checks `/memory/vector_cache`; it starts Docker/Qwen3 only when `pending > 0`.
-Use this as the immediate refresh interface:
-
-```sh
-sh scripts/refresh-openwrt-vector-cache.sh
-```
-
-Or trigger the same refresh through systemd:
-
-```sh
-systemctl --user start agent-memory-vector-cache-drain.service
-```
+For the live OpenWrt deployment, `agent-memory-bge-m3-drain` watches the
+`bge_m3` queue and drains pending Dense+Sparse jobs into
+`agent_chunks_bge_m3_hybrid`.
 
 MCP tools:
 
@@ -354,18 +336,21 @@ WantedBy=multi-user.target
 
 ## Embeddings
 
-`app/config.yaml` can use an HTTP embedding sidecar. The OpenWrt deployment uses
-`intfloat/multilingual-e5-small`, matching the existing Qdrant vectors:
+`app/config.yaml` can use HTTP sidecars. The OpenWrt deployment uses
+`BAAI/bge-m3` for Dense+Sparse embeddings, Qdrant native hybrid search in
+`agent_chunks_bge_m3_hybrid`, and `BAAI/bge-reranker-v2-m3` for final rerank:
 
 ```sh
 cd /opt/agent-memory
-docker compose up -d --build embedding
-curl -s http://127.0.0.1:18089/health
+docker compose up -d --build bge-m3 bge-reranker bge-m3-drain
+curl -s http://127.0.0.1:18090/health
+curl -s http://127.0.0.1:18091/health
 /etc/init.d/agent-memory restart
 ```
 
-The embedding service is bound to `127.0.0.1:18089`. If it is unavailable or
-too slow, recall falls back to SQLite FTS5.
+The embedding service is bound to `127.0.0.1:18090` and the reranker service is
+bound to `127.0.0.1:18091`. If either sidecar is unavailable, recall falls back
+to the lower-cost ranking path and SQLite FTS5 remains available.
 
 To use OpenAI embeddings, set:
 
